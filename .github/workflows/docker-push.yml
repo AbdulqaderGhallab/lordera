@@ -3,12 +3,7 @@
 on:
   push:
     branches: [ main ]
-    paths:
-      - 'whisper_service.py'
-      - 'qwen_service.py'
-      - 'Dockerfile'
-      - 'requirements.txt'
-      - '.github/workflows/docker-push.yml'
+  workflow_dispatch:
 
 jobs:
   build-whisper:
