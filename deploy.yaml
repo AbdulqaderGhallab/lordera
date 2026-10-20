@@ -1,0 +1,103 @@
+---
+version: "2.0"
+
+services:
+  gateway:
+    image: abdulqaderghallab/lordera-gateway:v2
+    env:
+      - "WHISPER_SERVICE_URL=http://localhost:8001"
+      - "QWEN_SERVICE_URL=http://localhost:8002"
+      - "INTERNAL_TOKEN=sec_int_tok_9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a"
+      - "GATEWAY_ADMIN_TOKEN=sec_adm_tok_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t"
+      - "MAX_QUEUE_SIZE=50"
+      - "REJECT_THRESHOLD=0.9"
+      - "JOB_TTL_SECONDS=1800"
+      - "JOB_CLEANUP_INTERVAL=60"
+      - "MAX_JOBS_IN_STORE=1000"
+      - "RATE_LIMIT_WINDOW=60.0"
+      - "RATE_LIMIT_MAX=10"
+      - "MAX_UPLOAD_SIZE=52428800"
+      - "WHISPER_TIMEOUT=300.0"
+      - "QWEN_TIMEOUT=120.0"
+      - "HEALTH_TIMEOUT=5.0"
+      - "MAX_RETRIES=3"
+      - "RETRY_BACKOFF=2.0"
+      - "LEGACY_WAIT_TIMEOUT=600.0"
+    expose:
+      - port: 8000
+        as: 80
+        to:
+          - global: true
+
+  controller:
+    image: abdulqaderghallab/lordera-controller:v2
+    env:
+      - "GATEWAY_URL=http://gateway:8000"
+      - "GATEWAY_ADMIN_TOKEN=sec_adm_tok_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t"
+      - "AKASH_BASE_URL=https://console-api.akash.network"
+      - "AKASH_API_KEY=DISABLED_FOR_AIR"
+      - "AKASH_RUNTIME_LIMIT_HOURS=4"
+      - "AKASH_BIDS_TIMEOUT=90.0"
+      - "AKASH_BIDS_INTERVAL=5.0"
+      - "GPU_SDL_PATH=/app/gpu.yaml"
+      - "CONTROLLER_POLL_INTERVAL=30.0"
+      - "CONTROLLER_IDLE_TIMEOUT=600.0"
+      - "CONTROLLER_START_TIMEOUT=300.0"
+      - "CONTROLLER_START_COOLDOWN=60.0"
+      - "CONTROLLER_STOP_COOLDOWN=120.0"
+      - "CONTROLLER_URI_WAIT_TIMEOUT=180.0"
+      - "CONTROLLER_URI_POLL_INTERVAL=10.0"
+      - "CONTROLLER_STATE_FILE=/state/controller_state.json"
+      - "CONTROLLER_DRY_RUN=true"
+    params:
+      storage:
+        controller-state:
+          mount: /state
+    expose:
+      - port: 8003
+        to:
+          - global: false
+
+profiles:
+  compute:
+    gateway:
+      resources:
+        cpu:
+          units: 0.5
+        memory:
+          size: 1Gi
+        storage:
+          - size: 5Gi
+    controller:
+      resources:
+        cpu:
+          units: 0.5
+        memory:
+          size: 512Mi
+        storage:
+          - size: 5Gi
+          - name: controller-state
+            size: 1Gi
+            attributes:
+              persistent: true
+              class: beta2
+
+  placement:
+    akash:
+      pricing:
+        gateway:
+          denom: uact
+          amount: 10000
+        controller:
+          denom: uact
+          amount: 10000
+
+deployment:
+  gateway:
+    akash:
+      profile: gateway
+      count: 1
+  controller:
+    akash:
+      profile: controller
+      count: 1

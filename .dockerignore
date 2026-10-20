@@ -1,0 +1,215 @@
+# ==============================================================================
+# Lordera AI — .dockerignore
+# ==============================================================================
+# Purpose: Exclude files/folders from the Docker build context.
+# Effects:
+#   • Smaller build context  → faster `docker build` (fewer bytes to send)
+#   • Cleaner image          → no secrets, no docs, no IDE cruft
+#   • Safer cache reuse      → irrelevant files don't bust COPY . . cache
+#
+# NOTE: requirements.txt and all *.py service files MUST remain included.
+# ==============================================================================
+
+
+# ------------------------------------------------------------------------------
+# 1. Models & large binary artifacts
+#    These live on Akash persistent storage at /models, NOT in the image.
+# ------------------------------------------------------------------------------
+models/
+checkpoints/
+weights/
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.onnx
+*.h5
+*.ckpt
+*.gguf
+*.msgpack
+*.tflite
+*.pb
+
+
+# ------------------------------------------------------------------------------
+# 2. Python caches, virtual envs, and build artifacts
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.pyd
+
+# Build outputs
+build/
+develop-eggs/
+dist/
+eggs/
+.eggs/
+sdist/
+wheels/
+*.egg-info/
+*.egg
+.installed.cfg
+
+# Package managers
+pip-wheel-metadata/
+*.whl
+
+# Virtual environments
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Test / coverage caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+*.cover
+
+
+# ------------------------------------------------------------------------------
+# 3. Deployment, orchestration, and project management
+#    These belong on the host / Akash console, not inside the container.
+# ------------------------------------------------------------------------------
+deploy.yaml
+deploy_*.yaml
+*.yaml.bak
+docker-compose*.yml
+docker-compose*.yaml
+Dockerfile
+Dockerfile.light
+Dockerfile.fix-*
+Dockerfile.*.bak
+.dockerignore
+Makefile
+justfile
+*.mk
+
+# Backup / patch files
+*.orig
+*.rej
+*.patch
+*.diff
+
+
+# ------------------------------------------------------------------------------
+# 4. Version control & CI/CD
+# ------------------------------------------------------------------------------
+.git/
+.gitignore
+.gitattributes
+.gitmodules
+.git-credentials
+.github/
+.gitlab/
+.gitlab-ci.yml
+.travis.yml
+.circleci/
+Jenkinsfile
+.azure-pipelines/
+.drone.yml
+
+
+# ------------------------------------------------------------------------------
+# 5. Environment files & secrets — NEVER ship these
+# ------------------------------------------------------------------------------
+.env
+.env.*
+*.env
+secrets/
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+credentials.json
+service-account*.json
+*.kubeconfig
+
+
+# ------------------------------------------------------------------------------
+# 6. IDE / editor files
+# ------------------------------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*~
+.project
+.classpath
+.pydevproject
+.settings/
+.vim/
+.emacs.d/
+
+
+# ------------------------------------------------------------------------------
+# 7. OS metadata, logs, and temporary files
+# ------------------------------------------------------------------------------
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.swp
+*.pid
+*.sock
+
+
+# ------------------------------------------------------------------------------
+# 8. Local data dumps & notebooks
+# ------------------------------------------------------------------------------
+data/
+datasets/
+*.sqlite
+*.sqlite3
+*.db
+*.csv
+*.tsv
+*.parquet
+*.arrow
+.ipynb_checkpoints/
+*.ipynb
+
+
+# ------------------------------------------------------------------------------
+# 9. Documentation (uncomment if you don't want docs in the image)
+#    Kept INCLUDED by default because README.md inside the image is harmless
+#    and can help with debugging via `docker exec`.
+# ------------------------------------------------------------------------------
+# README.md
+# CHANGELOG.md
+# docs/
+# *.md
+# *.pdf
+
+
+# ------------------------------------------------------------------------------
+# 10. Test suites (uncomment if you don't want tests in the image)
+# ------------------------------------------------------------------------------
+# tests/
+# test_*.py
+# *_test.py
+# conftest.py

@@ -1,0 +1,40 @@
+﻿name: Build and Push Lordera Images
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'whisper_service.py'
+      - 'qwen_service.py'
+      - 'Dockerfile'
+      - 'requirements.txt'
+      - '.github/workflows/docker-push.yml'
+
+jobs:
+  build-whisper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+      - name: Build and push whisper
+        run: |
+          docker build --build-arg SERVICE=whisper_service --build-arg PORT=8001 -t abdulqaderghallab/lordera-whisper:v2 .
+          docker push abdulqaderghallab/lordera-whisper:v2
+
+  build-qwen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+      - name: Build and push qwen
+        run: |
+          docker build --build-arg SERVICE=qwen_service --build-arg PORT=8002 -t abdulqaderghallab/lordera-qwen:v2 .
+          docker push abdulqaderghallab/lordera-qwen:v2

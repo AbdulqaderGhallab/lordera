@@ -1,0 +1,53 @@
+---
+version: "2.0"
+
+services:
+  qwen:
+    image: abdulqaderghallab/lordera-qwen:v2
+    env:
+      - "QWEN_MODEL_NAME=Qwen/Qwen2.5-7B-Instruct"
+      - "MODEL_DIR=/models"
+      - "INTERNAL_TOKEN=sec_int_tok_9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a"
+    params:
+      storage:
+        qwen-models:
+          mount: /models
+    expose:
+      - port: 8002
+        as: 80
+        to:
+          - global: true
+
+profiles:
+  compute:
+    qwen:
+      resources:
+        cpu:
+          units: 4.0
+        memory:
+          size: 32Gi
+        storage:
+          - size: 40Gi
+          - name: qwen-models
+            size: 30Gi
+            attributes:
+              persistent: true
+              class: beta2
+        gpu:
+          units: 1
+          attributes:
+            vendor:
+              nvidia: []
+
+  placement:
+    akash:
+      pricing:
+        qwen:
+          denom: uact
+          amount: 500000
+
+deployment:
+  qwen:
+    akash:
+      profile: qwen
+      count: 1

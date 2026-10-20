@@ -1,0 +1,59 @@
+# ==============================================================================
+# Lordera AI — Lightweight Dockerfile for CPU-only services
+# ==============================================================================
+# Used ONLY for: gateway_service and controller_service
+# These services do NOT use PyTorch, CUDA, WhisperX, or Transformers.
+#
+# Benefits:
+#   • Build time:   ~2 minutes (vs ~3 hours)
+#   • Image size:   ~250 MB    (vs ~16 GB)
+#   • Akash deploy: ~30 seconds (vs ~15 minutes)
+#
+# CHANGELOG:
+#   • v2: Fixed shell redirection bug — every version constraint is now
+#     quoted to prevent `>` from creating files named "=X.Y.Z".
+# ==============================================================================
+
+FROM python:3.11-slim
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=120
+
+WORKDIR /app
+
+# Minimal system deps — only curl for healthcheck
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# CPU-only requirements — every constraint quoted to avoid shell redirection
+RUN pip3 install --retries 10 --timeout 120 \
+        "fastapi>=0.115.0" \
+        "uvicorn[standard]>=0.30.0" \
+        "python-multipart>=0.0.9" \
+        "pydantic>=2.8.0" \
+        "httpx>=0.27.0"
+
+# Copy service code + SDL (for controller)
+COPY gateway_service.py .
+COPY controller_service.py .
+COPY gpu.yaml .
+
+# Create models dir placeholder (not used but consistent with other images)
+RUN mkdir -p /models
+
+ARG SERVICE=gateway_service
+ARG PORT=8000
+
+ENV SERVICE=${SERVICE} \
+    PORT=${PORT}
+
+EXPOSE ${PORT}
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/health || exit 1
+
+CMD ["sh", "-c", "uvicorn ${SERVICE}:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]
