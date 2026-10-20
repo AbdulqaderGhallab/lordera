@@ -1,2 +1,0 @@
-﻿FROM abdulqaderghallab/lordera-whisper:v2
-COPY whisper_service.py /app/whisper_service.py

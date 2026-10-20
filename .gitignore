@@ -1,0 +1,11 @@
+﻿# Large binaries - لا ترفعها
+regctl*
+*.exe
+*.bin
+__pycache__/
+.venv/
+venv/
+models/
+*.log
+.env
+Dockerfile.*.patch
