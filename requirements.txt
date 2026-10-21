@@ -64,3 +64,12 @@ matplotlib>=3.8.0
 #    Transcription + VAD + alignment + bundled audio loaders.
 # ------------------------------------------------------------------------------
 whisperx>=3.1.1
+
+
+# ------------------------------------------------------------------------------
+# 6. Akash Controller - direct blockchain access (local Air, no API key)
+#    - akash: official Python SDK (pip install akash) for MsgCreate/CloseDeployment
+#    - python-dotenv: load AKASH_MNEMONIC from .env / GitHub Secrets
+# ------------------------------------------------------------------------------
+akash>=0.5.0
+python-dotenv>=1.0.0

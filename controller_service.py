@@ -1,61 +1,33 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.3.1
+Lordera AI — Controller Service v1.4.0 (Local Air)
 ==============================================================================
 ROLE:
-  Monitor the Gateway queue and manage the lifecycle of a GPU deployment
-  (Whisper + Qwen together) on Akash via the Console Managed Wallet API.
-  This is the brain that reduces monthly cost from ~$108 to ~$8-20.
+  Monitor Gateway queue and manage GPU deployment lifecycle on Akash
+  via direct blockchain access (mnemonic, no Console API key).
+  Cost saver: ~$108 -> ~$8-20/month.
 
-CHANGELOG v1.3 → v1.3.1:
-  • GPU_SDL_PATH default changed: /app/sdl/gpu.yaml → /app/gpu.yaml.
-    Reason: Dockerfile v2.0-restored preserves the pip cache by removing
-    the explicit `COPY gpu.yaml /app/sdl/gpu.yaml` layer. Instead, gpu.yaml
-    is copied implicitly by `COPY . .` and lands at /app/gpu.yaml.
-
-CHANGELOG v1.2 → v1.3:
-  • Fixed scheme: http:// → https:// in _extract_service_uris().
-    Akash Console exposes public URIs via HTTPS (TLS termination is automatic).
-    Using http:// caused ConnectError on every downstream call.
-
-CHANGELOG v1.1 → v1.2:
-  • Dynamic downstream URL resolution: after lease creation, poll
-    GET /v1/deployments/{dseq} until URIs appear, then push them to Gateway
-    via POST /admin/downstream.
-  • RUNTIME_LIMIT_HOURS hard cap: safety net if controller fails to stop.
-  • extract_service_uris_from_deployment(): parse URIs from deployment body.
-  • push_downstream_urls(): send new URLs to Gateway.
-  • check_services_ready() now uses the dynamically resolved URLs.
+CHANGE v1.3.1 -> v1.4.0:
+  • Removed Console API (x-api-key)
+  • Added direct chain client using akash SDK + AKASH_MNEMONIC
+  • Full control: create = start, close = full stop/delete
+  • Works with local Akash Air, no central console needed
 
 STATE MACHINE:
-
     ┌────────┐  queue>0   ┌──────────┐  ready   ┌─────────┐
     │  IDLE  │ ─────────► │ STARTING │ ───────► │ RUNNING │
     └────────┘            └──────────┘          └─────────┘
         ▲                                           │
-        │                                           │ idle>10m
         │              ┌──────────┐                 │
         └──────────────│ STOPPING │◄────────────────┘
                        └──────────┘
 
-AKASH CONSOLE API FACTS (verified from official docs):
-  • Base URL:      https://console-api.akash.network
-  • Auth:          x-api-key: <KEY>   (NOT Bearer!)
-  • Envelope:      Every response is wrapped in {"data": {...}}
-  • Create:        POST /v1/deployments  {"data": {"sdl": "<yaml>"}}
-  • Bids:          GET  /v1/bids?dseq=<dseq>   (wait ~30-60s)
-  • Lease:         POST /v1/leas  {"leases": [{dseq,gseq,oseq,provider}]}
-  • Get:           GET  /v1/deployments/{dseq}
-  • Close:         DELETE /v1/deployments/{dseq}
-  • No deposit needed — Console funds automatically from credits.
-
-DESIGN PRINCIPLES:
-  1. NEVER crash        → every external call wrapped in try/except
-  2. NEVER hang         → hard timeouts on every HTTP call
-  3. NEVER flip-flop    → cooldown periods between START and STOP
-  4. RECOVERABLE        → persist DSEQs to disk, restore on restart
-  5. TESTABLE           → DRY_RUN mode prints actions without calling Akash
-  6. IDEMPOTENT         → safe to call START/STOP repeatedly
+DESIGN:
+  1. Never crash   -> try/except on external calls
+  2. Never hang    -> hard timeouts
+  3. No flip-flop  -> cooldowns
+  4. Recoverable   -> persist dseq to disk
+  5. Testable      -> DRY_RUN mode
 ==============================================================================
 """
 import os
@@ -73,7 +45,16 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
+from dotenv import load_dotenv
 
+load_dotenv()
+
+# Try Akash SDK - official PyPI: pip install akash
+try:
+    from akash import AkashClient, SDL
+    SDK_AVAILABLE = True
+except ImportError:
+    SDK_AVAILABLE = False
 
 # ==============================================================================
 # Logging
@@ -86,20 +67,20 @@ logger = logging.getLogger("controller")
 
 
 # ==============================================================================
-# Configuration
+# Config
 # ==============================================================================
 GATEWAY_URL          = os.getenv("GATEWAY_URL", "http://gateway:8000")
 GATEWAY_ADMIN_TOKEN  = os.getenv("GATEWAY_ADMIN_TOKEN", "")
 
-AKASH_BASE_URL       = os.getenv("AKASH_BASE_URL", "https://console-api.akash.network")
-AKASH_API_KEY        = os.getenv("AKASH_API_KEY", "")
+# New - direct chain access (local Air)
+AKASH_MNEMONIC       = os.getenv("AKASH_MNEMONIC", "")
+AKASH_NODE           = os.getenv("AKASH_NODE", "https://rpc.akash.network:443")
+AKASH_CHAIN_ID       = os.getenv("AKASH_CHAIN_ID", "akashnet-2")
 AKASH_TIMEOUT        = float(os.getenv("AKASH_TIMEOUT", "30.0"))
 AKASH_BIDS_TIMEOUT   = float(os.getenv("AKASH_BIDS_TIMEOUT", "90.0"))
 AKASH_BIDS_INTERVAL  = float(os.getenv("AKASH_BIDS_INTERVAL", "5.0"))
-AKASH_RUNTIME_LIMIT  = os.getenv("AKASH_RUNTIME_LIMIT_HOURS", "4")   # hard cap (safety net)
+AKASH_RUNTIME_LIMIT  = os.getenv("AKASH_RUNTIME_LIMIT_HOURS", "4")
 
-# SDL path — default matches Dockerfile v2.0-restored layout (/app/gpu.yaml).
-# gpu.yaml is copied implicitly via `COPY . .` (not a dedicated COPY layer).
 GPU_SDL_PATH         = os.getenv("GPU_SDL_PATH", "/app/gpu.yaml")
 
 POLL_INTERVAL        = float(os.getenv("CONTROLLER_POLL_INTERVAL", "30.0"))
@@ -108,7 +89,6 @@ START_TIMEOUT        = float(os.getenv("CONTROLLER_START_TIMEOUT", "300.0"))
 STOP_COOLDOWN        = float(os.getenv("CONTROLLER_STOP_COOLDOWN", "120.0"))
 START_COOLDOWN       = float(os.getenv("CONTROLLER_START_COOLDOWN", "60.0"))
 
-# How long to wait for URIs to appear after lease
 URI_WAIT_TIMEOUT     = float(os.getenv("CONTROLLER_URI_WAIT_TIMEOUT", "180.0"))
 URI_POLL_INTERVAL    = float(os.getenv("CONTROLLER_URI_POLL_INTERVAL", "10.0"))
 
@@ -220,12 +200,8 @@ async def fetch_gateway_status() -> Optional[Dict[str, Any]]:
 
 
 async def push_downstream_urls(whisper_url: str, qwen_url: str) -> bool:
-    """
-    Tell the Gateway the current URLs of Whisper and Qwen.
-    Protected by GATEWAY_ADMIN_TOKEN.
-    """
     if not GATEWAY_ADMIN_TOKEN:
-        logger.warning("GATEWAY_ADMIN_TOKEN not set — cannot push URLs to Gateway")
+        logger.warning("GATEWAY_ADMIN_TOKEN not set — cannot push URLs")
         return False
     try:
         r = await http_client.post(
@@ -247,164 +223,204 @@ async def push_downstream_urls(whisper_url: str, qwen_url: str) -> bool:
 
 
 # ==============================================================================
-# Akash Console API Client
+# Akash Direct Client (Local Air - no API key)
 # ==============================================================================
 class AkashAPI:
-    """Wrapper over the Akash Console Managed Wallet API. Never raises."""
+    """Direct blockchain client using mnemonic. Full start/stop control."""
 
-    def __init__(self, base_url: str, api_key: str, dry_run: bool = False):
-        self.base_url = base_url.rstrip("/")
-        self.api_key = api_key
+    def __init__(self, dry_run: bool = False):
         self.dry_run = dry_run
+        self.mnemonic = os.getenv("AKASH_MNEMONIC", "") or AKASH_MNEMONIC
+        self.node = AKASH_NODE
+        self.chain_id = AKASH_CHAIN_ID
+        self.client = None
 
-    def _headers(self) -> Dict[str, str]:
-        # CORRECT AUTH: x-api-key (not Bearer)
-        return {"x-api-key": self.api_key, "Content-Type": "application/json"}
+        if self.dry_run:
+            logger.info("DRY_RUN enabled - no real chain calls")
+            return
 
-    def _unwrap(self, r: httpx.Response) -> Optional[Any]:
-        """Extract 'data' from the response envelope."""
+        if not SDK_AVAILABLE:
+            logger.error("akash SDK not installed. Run: pip install akash")
+            return
+
+        if not self.mnemonic:
+            logger.warning("AKASH_MNEMONIC not set - chain calls will fail")
+            return
+
         try:
-            body = r.json()
-        except Exception:
-            logger.error(f"Non-JSON response: {r.text[:200]}")
-            return None
-        if isinstance(body, dict) and "data" in body:
-            return body["data"]
-        return body
-
-    async def _request(self, method: str, path: str, **kwargs) -> Optional[httpx.Response]:
-        url = f"{self.base_url}{path}"
-        try:
-            return await http_client.request(
-                method, url,
-                headers=self._headers(),
-                timeout=AKASH_TIMEOUT,
-                **kwargs,
+            # SDK init - sync
+            self.client = AkashClient.from_mnemonic(
+                mnemonic=self.mnemonic,
+                node=self.node,
+                chain_id=self.chain_id,
             )
-        except httpx.TimeoutException:
-            logger.error(f"Akash {method} {path}: timeout")
-        except httpx.HTTPError as e:
-            logger.error(f"Akash {method} {path}: {type(e).__name__}: {e}")
-        except Exception:
-            logger.exception(f"Akash {method} {path}: unexpected error")
-        return None
+            logger.info(f"Connected to Akash chain: {self.chain_id} via {self.node}")
+        except Exception as e:
+            logger.error(f"Failed to init AkashClient: {e}")
 
     # ---------------------------------------------------------------- create
     async def create_deployment(self, sdl_yaml: str) -> Optional[str]:
-        """POST /v1/deployments  {"data": {"sdl": "<yaml>"}}  → returns dseq."""
         if self.dry_run:
             fake = f"DRYRUN-{int(time.time())}"
-            logger.info(f"[DRY-RUN] Would create deployment → DSEQ {fake}")
+            logger.info(f"[DRY-RUN] Would create deployment -> DSEQ {fake}")
             return fake
 
-        payload: Dict[str, Any] = {"data": {"sdl": sdl_yaml}}
-        if AKASH_RUNTIME_LIMIT:
-            try:
-                payload["data"]["runtimeLimitHours"] = float(AKASH_RUNTIME_LIMIT)
-            except ValueError:
-                logger.warning(f"Invalid AKASH_RUNTIME_LIMIT_HOURS={AKASH_RUNTIME_LIMIT}; ignored")
-
-        r = await self._request("POST", "/v1/deployments", json=payload)
-        if r is None:
-            return None
-        if r.status_code not in (200, 201):
-            logger.error(f"create_deployment HTTP {r.status_code}: {r.text[:300]}")
+        if not self.client:
+            logger.error("Akash client not initialized")
             return None
 
-        data = self._unwrap(r)
-        if not isinstance(data, dict):
-            logger.error(f"create_deployment: unexpected body {r.text[:200]}")
-            return None
+        try:
+            sdl = SDL.from_yaml(sdl_yaml)
+            deployment = await asyncio.to_thread(self.client.create_deployment, sdl)
+            
+            # Robust DSEQ extraction
+            dseq = ""
+            if hasattr(deployment, 'id') and hasattr(deployment.id, 'dseq'):
+                dseq = str(deployment.id.dseq)
+            elif isinstance(deployment, dict):
+                dseq = str(deployment.get('dseq') or deployment.get('data', {}).get('dseq') or '')
+            else:
+                # Fallback: try fetching recent deployments
+                deps = await asyncio.to_thread(self.client.fetch_deployments)
+                if deps:
+                    dseq = str(getattr(deps[0], 'dseq', ''))
+            
+            if not dseq:
+                logger.error(f"Could not extract DSEQ from response: {deployment}")
+                return None
 
-        dseq = str(data.get("dseq") or "")
-        if not dseq:
-            logger.error(f"create_deployment: no dseq in {data}")
+            logger.info(f"Created deployment -> DSEQ {dseq}")
+            return dseq
+        except Exception as e:
+            logger.error(f"create_deployment failed: {type(e).__name__}: {e}")
             return None
-        logger.info(f"Created deployment → DSEQ {dseq}")
-        return dseq
 
     # ---------------------------------------------------------------- bids
     async def fetch_bids(self, dseq: str) -> List[Dict[str, Any]]:
-        """GET /v1/bids?dseq=<dseq>. Returns list of bid objects."""
         if self.dry_run:
             return [{"bid": {"id": {
                 "owner": "akash1dryrun", "dseq": dseq,
                 "gseq": 1, "oseq": 1,
                 "provider": "akash1dryprovider", "bseq": 1,
             }, "state": "open",
-               "price": {"denom": "uact", "amount": "1000"}}}]
+               "price": {"denom": "uakt", "amount": "1000"}}}]
 
-        r = await self._request("GET", "/v1/bids", params={"dseq": dseq})
-        if r is None or r.status_code != 200:
-            if r is not None:
-                logger.warning(f"fetch_bids HTTP {r.status_code}: {r.text[:200]}")
+        if not self.client:
             return []
 
-        data = self._unwrap(r)
-        if isinstance(data, list):
-            return data
-        if isinstance(data, dict):
-            return data.get("bids", []) or []
-        return []
+        try:
+            bids = await asyncio.to_thread(self.client.fetch_bids, dseq)
+            result = []
+            for b in bids:
+                # Safely parse SDK objects to dicts
+                bid_obj = getattr(b, 'bid', b)
+                bid_id = getattr(bid_obj, 'bid_id', getattr(b, 'bid_id', None))
+                
+                if bid_id:
+                    gseq = getattr(bid_id, 'gseq', 1)
+                    oseq = getattr(bid_id, 'oseq', 1)
+                    provider = getattr(bid_id, 'provider', '')
+                else:
+                    gseq, oseq, provider = 1, 1, ""
+                
+                price_obj = getattr(bid_obj, 'price', getattr(b, 'price', None))
+                amount = getattr(price_obj, 'amount', '1000') if price_obj else '1000'
+
+                result.append({
+                    "bid": {
+                        "id": {"gseq": gseq, "oseq": oseq, "provider": provider},
+                        "price": {"amount": str(amount)}
+                    }
+                })
+            return result
+        except Exception as e:
+            logger.warning(f"fetch_bids failed: {e}")
+            return []
 
     # ---------------------------------------------------------------- lease
     async def create_lease(self, dseq: str, gseq: int, oseq: int, provider: str) -> bool:
-        """POST /v1/leases  {"leases": [{dseq,gseq,oseq,provider}]}"""
         if self.dry_run:
             logger.info(f"[DRY-RUN] Would create lease dseq={dseq} provider={provider}")
             return True
 
-        payload = {"leases": [{
-            "dseq": dseq, "gseq": gseq, "oseq": oseq, "provider": provider,
-        }]}
-        r = await self._request("POST", "/v1/leases", json=payload)
-        if r is None:
+        if not self.client:
             return False
-        if r.status_code == 200:
+
+        try:
+            await asyncio.to_thread(self.client.create_lease, dseq, gseq, oseq, provider)
             logger.info(f"Lease created dseq={dseq} provider={provider}")
             return True
-        if r.status_code == 502:
-            logger.error(f"Lease HTTP 502 (provider unreachable): {r.text[:200]}")
+        except Exception as e:
+            logger.error(f"create_lease failed: {e}")
             return False
-        logger.error(f"create_lease HTTP {r.status_code}: {r.text[:300]}")
-        return False
 
-    # ---------------------------------------------------------------- get
+    # ---------------------------------------------------------------- get (Lease Status)
     async def get_deployment(self, dseq: str) -> Optional[Dict[str, Any]]:
-        """GET /v1/deployments/{dseq}"""
         if self.dry_run:
             return {"leases": [{"status": {"services": {
                 "whisper": {"uris": ["dry-whisper.example.com"]},
                 "qwen":    {"uris": ["dry-qwen.example.com"]},
             }}}]}
-        r = await self._request("GET", f"/v1/deployments/{dseq}")
-        if r is None or r.status_code != 200:
+
+        if not self.client:
             return None
-        return self._unwrap(r)
+
+        try:
+            # Fetch leases for the deployment
+            leases = await asyncio.to_thread(self.client.fetch_leases, dseq)
+            if not leases:
+                return None
+            
+            lease = leases[0]
+            # Extract lease identifiers safely
+            gseq = getattr(lease, 'gseq', 1)
+            oseq = getattr(lease, 'oseq', 1)
+            provider = getattr(lease, 'provider', '')
+            
+            # Fetch lease status from provider
+            status = await asyncio.to_thread(self.client.fetch_lease_status, dseq, gseq, oseq, provider)
+            
+            services_dict = {}
+            if hasattr(status, 'services'):
+                for svc_name, svc_obj in status.services.items():
+                    uris = getattr(svc_obj, 'uris', [])
+                    services_dict[svc_name] = {"uris": uris}
+            elif isinstance(status, dict):
+                for svc_name, svc_obj in status.get('services', {}).items():
+                    uris = svc_obj.get('uris', []) if isinstance(svc_obj, dict) else getattr(svc_obj, 'uris', [])
+                    services_dict[svc_name] = {"uris": uris}
+
+            return {"leases": [{"status": {"services": services_dict}}]}
+        except Exception as e:
+            logger.warning(f"get_deployment(lease_status) failed: {e}")
+            return None
 
     # ---------------------------------------------------------------- close
     async def close_deployment(self, dseq: str) -> bool:
-        """DELETE /v1/deployments/{dseq}"""
+        """Full stop - closes deployment on chain."""
         if not dseq:
             return True
         if self.dry_run:
             logger.info(f"[DRY-RUN] Would close DSEQ {dseq}")
             return True
 
-        r = await self._request("DELETE", f"/v1/deployments/{dseq}")
-        if r is None:
+        if not self.client:
+            logger.error("Akash client not initialized")
             return False
-        if r.status_code in (200, 202, 204):
+
+        try:
+            await asyncio.to_thread(self.client.close_deployment, dseq)
             logger.info(f"Closed DSEQ {dseq}")
             return True
-        if r.status_code == 404:
-            logger.warning(f"DSEQ {dseq} not found — assuming already closed")
-            return True
-        logger.error(f"close_deployment HTTP {r.status_code}: {r.text[:200]}")
-        return False
+        except Exception as e:
+            if "not found" in str(e).lower() or "404" in str(e):
+                logger.warning(f"DSEQ {dseq} not found - assuming already closed")
+                return True
+            logger.error(f"close_deployment failed: {e}")
+            return False
 
 
-akash = AkashAPI(AKASH_BASE_URL, AKASH_API_KEY, dry_run=DRY_RUN)
+akash = AkashAPI(dry_run=DRY_RUN)
 
 
 # ==============================================================================
@@ -423,16 +439,9 @@ def _load_sdl(path: str) -> Optional[str]:
 
 
 # ==============================================================================
-# URI extraction (defensive parser) — FIXED: https:// (was http://)
+# URI extraction
 # ==============================================================================
 def _extract_service_uris(deployment: Dict[str, Any]) -> Dict[str, str]:
-    """
-    Walk the deployment JSON and extract public URIs for 'whisper' and 'qwen'.
-    The exact shape varies by Console version — this parser is defensive.
-
-    IMPORTANT: Akash exposes public URIs via HTTPS (automatic TLS termination).
-    We prepend https:// if the URI has no scheme.
-    """
     out: Dict[str, str] = {}
     try:
         leases = deployment.get("leases") or []
@@ -445,7 +454,6 @@ def _extract_service_uris(deployment: Dict[str, Any]) -> Dict[str, str]:
                     if uris and isinstance(uris, list):
                         u = str(uris[0]).strip()
                         if u and not u.startswith("http"):
-                            # Akash public URIs are HTTPS (port 443, TLS terminated)
                             u = "https://" + u
                         out[svc_name] = u
     except Exception as e:
@@ -454,10 +462,6 @@ def _extract_service_uris(deployment: Dict[str, Any]) -> Dict[str, str]:
 
 
 async def resolve_and_push_uris(dseq: str) -> bool:
-    """
-    Poll the deployment until URIs for whisper and qwen appear, then push them
-    to the Gateway. Returns True when both URLs were pushed successfully.
-    """
     deadline = time.time() + URI_WAIT_TIMEOUT
     while time.time() < deadline:
         dep = await akash.get_deployment(dseq)
@@ -472,7 +476,7 @@ async def resolve_and_push_uris(dseq: str) -> bool:
                 _persist_state()
                 if await push_downstream_urls(whisper_url, qwen_url):
                     return True
-                logger.warning("URIs found but push failed — will retry")
+                logger.warning("URIs found but push failed - will retry")
             else:
                 logger.info(
                     f"Waiting for URIs... whisper={whisper_url or '-'} qwen={qwen_url or '-'}"
@@ -515,7 +519,7 @@ async def _wait_and_lease(dseq: str) -> bool:
                     ctx.gpu_oseq = oseq
                     ctx.gpu_provider = prov
                     return True
-            logger.warning("All bids failed — retrying in a moment")
+            logger.warning("All bids failed - retrying")
         logger.info(f"No bids yet (attempt {attempt})")
         await asyncio.sleep(AKASH_BIDS_INTERVAL)
     logger.error(f"No bid accepted within {AKASH_BIDS_TIMEOUT}s")
@@ -526,7 +530,6 @@ async def _wait_and_lease(dseq: str) -> bool:
 # Core actions: START / STOP
 # ==============================================================================
 async def action_start() -> bool:
-    """Create GPU deployment, wait for bids, create lease, push URLs."""
     ctx.state = ControllerState.STARTING
     ctx.started_at = time.time()
     logger.info("=" * 60)
@@ -542,195 +545,135 @@ async def action_start() -> bool:
         ctx.state = ControllerState.ERROR
         return False
 
-    # 1. Create deployment
     dseq = await akash.create_deployment(sdl)
     if not dseq:
         ctx.last_error = "create_deployment failed"
         ctx.state = ControllerState.ERROR
         return False
+
     ctx.gpu_dseq = dseq
     _persist_state()
 
-    # 2. Wait for bids + create lease
     if not await _wait_and_lease(dseq):
-        ctx.last_error = "lease creation failed"
-        logger.warning(f"Lease failed → closing orphan deployment {dseq}")
+        ctx.last_error = "bids/lease failed"
+        ctx.state = ControllerState.ERROR
         await akash.close_deployment(dseq)
         ctx.gpu_dseq = ""
-        ctx.gpu_provider = ""
-        ctx.state = ControllerState.ERROR
-        _persist_state()
         return False
 
-    # 3. Resolve URIs and push to Gateway (fire and forget — non-blocking)
-    asyncio.create_task(resolve_and_push_uris(dseq))
+    if not await resolve_and_push_uris(dseq):
+        ctx.last_error = "URI resolution failed"
+        ctx.state = ControllerState.ERROR
+        return False
 
+    ctx.state = ControllerState.RUNNING
     ctx.total_starts += 1
-    ctx.last_error = None
+    ctx.last_activity_at = time.time()
     _persist_state()
-    logger.info("START complete — waiting for services to become ready")
+    logger.info(f"START complete dseq={dseq}")
     return True
 
 
 async def action_stop() -> bool:
-    """Close the GPU deployment."""
     ctx.state = ControllerState.STOPPING
     logger.info("=" * 60)
-    logger.info("ACTION: STOP")
+    logger.info(f"ACTION: STOP dseq={ctx.gpu_dseq}")
 
-    if not ctx.gpu_dseq:
+    dseq = ctx.gpu_dseq
+    if not dseq:
         ctx.state = ControllerState.IDLE
-        ctx.stopped_at = time.time()
-        logger.info("Nothing to stop (no active deployment)")
         return True
 
-    ok = await akash.close_deployment(ctx.gpu_dseq)
-    if ok:
-        ctx.gpu_dseq = ""
-        ctx.gpu_provider = ""
-        ctx.gpu_gseq = 0
-        ctx.gpu_oseq = 0
-        ctx.whisper_url = ""
-        ctx.qwen_url = ""
-        ctx.total_stops += 1
-        ctx.stopped_at = time.time()
-        ctx.state = ControllerState.IDLE
-        ctx.last_error = None
-        logger.info("STOP complete — IDLE")
-    else:
-        ctx.last_error = "close_deployment failed"
+    ok = await akash.close_deployment(dseq)
+    if not ok:
+        ctx.last_error = f"close_deployment failed for {dseq}"
         ctx.state = ControllerState.ERROR
-        logger.warning("STOP failed")
-
-    _persist_state()
-    return ok
-
-
-# ==============================================================================
-# Readiness check (uses dynamic URLs when available)
-# ==============================================================================
-async def check_services_ready() -> bool:
-    """
-    If we have URIs → probe /health on both Whisper and Qwen.
-    Otherwise fall back to a time-based readiness check.
-    """
-    if ctx.whisper_url and ctx.qwen_url:
-        try:
-            results = await asyncio.gather(
-                http_client.get(f"{ctx.whisper_url}/health", timeout=5.0),
-                http_client.get(f"{ctx.qwen_url}/health", timeout=5.0),
-                return_exceptions=True,
-            )
-            return all(
-                not isinstance(r, Exception) and r.status_code == 200
-                for r in results
-            )
-        except Exception:
-            return False
-
-    if ctx.started_at is None:
         return False
-    return (time.time() - ctx.started_at) >= START_COOLDOWN
+
+    ctx.gpu_dseq = ""
+    ctx.gpu_provider = ""
+    ctx.gpu_gseq = 0
+    ctx.gpu_oseq = 0
+    ctx.whisper_url = ""
+    ctx.qwen_url = ""
+    ctx.stopped_at = time.time()
+    ctx.state = ControllerState.IDLE
+    ctx.total_stops += 1
+    ctx.total_cycles += 1
+    _persist_state()
+
+    # Clear Gateway downstream
+    await push_downstream_urls("", "")
+    logger.info("STOP complete")
+    return True
 
 
 # ==============================================================================
-# Main control loop
+# Control loop
 # ==============================================================================
-async def control_loop() -> None:
-    logger.info("=" * 70)
-    logger.info("Controller control loop started")
-    logger.info(f"  Mode:          {'DRY-RUN' if DRY_RUN else 'LIVE'}")
-    logger.info(f"  Gateway:       {GATEWAY_URL}")
-    logger.info(f"  Akash API:     {AKASH_BASE_URL}")
-    logger.info(f"  API key set:   {bool(AKASH_API_KEY)}")
-    logger.info(f"  Runtime cap:   {AKASH_RUNTIME_LIMIT}h")
-    logger.info(f"  SDL path:      {GPU_SDL_PATH}")
-    logger.info(f"  Poll every:    {POLL_INTERVAL}s")
-    logger.info(f"  Idle timeout:  {IDLE_TIMEOUT}s")
-    logger.info(f"  Bids wait:     {AKASH_BIDS_TIMEOUT}s")
-    logger.info("=" * 70)
-
-    while not stop_event.is_set():
+async def control_loop():
+    logger.info("Control loop started")
+    while True:
         try:
-            ctx.total_cycles += 1
+            if stop_event and stop_event.is_set():
+                break
 
-            gs = await fetch_gateway_status()
-            if gs is None:
-                ctx.consecutive_errors += 1
-                logger.warning(
-                    f"Cycle {ctx.total_cycles}: Gateway unreachable "
-                    f"({ctx.consecutive_errors} consecutive errors)"
-                )
-                await asyncio.sleep(POLL_INTERVAL)
-                continue
-
-            ctx.last_gateway_status = gs
-            ctx.last_gateway_check_at = time.time()
-            ctx.consecutive_errors = 0
-
-            queue_size     = int(gs.get("queue_size", 0))
-            worker_running = bool(gs.get("worker_running", False))
-
-            has_activity = (queue_size > 0) or worker_running
-            if has_activity:
-                ctx.last_activity_at = time.time()
-
-            logger.info(
-                f"Cycle {ctx.total_cycles} | state={ctx.state.value} | "
-                f"queue={queue_size} | worker={worker_running} | "
-                f"idle={int(time.time()-ctx.last_activity_at)}s | "
-                f"dseq={ctx.gpu_dseq or '-'}"
-            )
-
-            # -------------------- State transitions --------------------
-            if ctx.state == ControllerState.IDLE:
-                if ctx.stopped_at and (time.time() - ctx.stopped_at) < STOP_COOLDOWN:
-                    pass  # cooldown
-                elif has_activity:
-                    logger.info("Activity detected → START")
-                    await action_start()
-
-            elif ctx.state == ControllerState.STARTING:
-                ready = await check_services_ready()
-                if ready:
-                    ctx.state = ControllerState.RUNNING
+            status = await fetch_gateway_status()
+            if status:
+                ctx.last_gateway_status = status
+                ctx.last_gateway_check_at = time.time()
+                
+                # FIXED: Gateway uses "queue_size" not "queue_depth"
+                queue_depth = int(status.get("queue_size", 0) or 0)
+                if queue_depth > 0:
                     ctx.last_activity_at = time.time()
-                    logger.info("Services ready → RUNNING")
-                elif ctx.started_at and (time.time() - ctx.started_at) > START_TIMEOUT:
-                    logger.error(f"Not ready within {START_TIMEOUT}s — still waiting")
+
+            now = time.time()
+            idle_for = now - ctx.last_activity_at
+
+            # Runtime limit safety
+            if ctx.state == ControllerState.RUNNING and ctx.started_at:
+                try:
+                    limit_h = float(AKASH_RUNTIME_LIMIT) if AKASH_RUNTIME_LIMIT else 0
+                except ValueError:
+                    limit_h = 0
+                if limit_h > 0 and (now - ctx.started_at) > limit_h * 3600:
+                    logger.warning(f"Runtime limit {limit_h}h reached - stopping")
+                    await action_stop()
+                    await asyncio.sleep(POLL_INTERVAL)
+                    continue
+
+            if ctx.state == ControllerState.IDLE:
+                if status and int(status.get("queue_size", 0) or 0) > 0:
+                    if ctx.stopped_at and (now - ctx.stopped_at) < START_COOLDOWN:
+                        logger.info(f"Start cooldown {START_COOLDOWN}s")
+                    else:
+                        await action_start()
 
             elif ctx.state == ControllerState.RUNNING:
-                # Ensure URIs are still pushed (in case push failed earlier)
-                if ctx.whisper_url and ctx.qwen_url and GATEWAY_ADMIN_TOKEN:
-                    await push_downstream_urls(ctx.whisper_url, ctx.qwen_url)
-
-                idle_for = time.time() - ctx.last_activity_at
-                if idle_for >= IDLE_TIMEOUT:
-                    logger.info(f"Idle {idle_for:.0f}s → STOP")
-                    await action_stop()
-
-            elif ctx.state == ControllerState.STOPPING:
-                logger.warning("Still STOPPING — retrying")
-                await action_stop()
+                if idle_for > IDLE_TIMEOUT:
+                    if ctx.started_at and (now - ctx.started_at) < STOP_COOLDOWN:
+                        logger.info(f"Stop cooldown {STOP_COOLDOWN}s")
+                    else:
+                        logger.info(f"Idle {idle_for:.0f}s > {IDLE_TIMEOUT}s - stopping")
+                        await action_stop()
 
             elif ctx.state == ControllerState.ERROR:
-                logger.warning("Recovering from ERROR → IDLE")
+                logger.info(f"In ERROR state: {ctx.last_error} - will retry in {POLL_INTERVAL}s")
+                if ctx.gpu_dseq:
+                    await akash.close_deployment(ctx.gpu_dseq)
+                    ctx.gpu_dseq = ""
                 ctx.state = ControllerState.IDLE
-                ctx.last_error = None
+                ctx.consecutive_errors += 1
+
+            await asyncio.sleep(POLL_INTERVAL)
 
         except asyncio.CancelledError:
-            logger.info("Control loop cancelled")
             break
         except Exception:
-            logger.exception("Unexpected error in control loop")
+            logger.exception("control_loop error")
             ctx.consecutive_errors += 1
-            await asyncio.sleep(min(POLL_INTERVAL, 10))
-
-        # Interruptible sleep
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=POLL_INTERVAL)
-        except asyncio.TimeoutError:
-            pass
+            await asyncio.sleep(POLL_INTERVAL)
 
 
 # ==============================================================================
@@ -741,22 +684,15 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller Service v1.3.1 starting...")
-    logger.info(f"  API key set:        {bool(AKASH_API_KEY)}")
-    logger.info(f"  Gateway admin set:  {bool(GATEWAY_ADMIN_TOKEN)}")
-    logger.info(f"  SDL path:           {GPU_SDL_PATH}")
-    logger.info(f"  Dry-run:            {DRY_RUN}")
+    logger.info("Lordera Controller v1.4.0 starting (Local Air - direct chain)")
+    logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
+    logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID} sdk={SDK_AVAILABLE}")
     logger.info("=" * 70)
 
-    if not AKASH_API_KEY and not DRY_RUN:
-        logger.warning(
-            "AKASH_API_KEY is not set and DRY_RUN=false. "
-            "All Akash API calls will fail."
-        )
+    if not AKASH_MNEMONIC and not DRY_RUN:
+        logger.warning("AKASH_MNEMONIC not set and DRY_RUN=false - chain calls will fail")
     if not GATEWAY_ADMIN_TOKEN and not DRY_RUN:
-        logger.warning(
-            "GATEWAY_ADMIN_TOKEN not set — Controller cannot push URLs to Gateway."
-        )
+        logger.warning("GATEWAY_ADMIN_TOKEN not set - cannot push URLs to Gateway")
 
     http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(30.0, connect=10.0),
@@ -789,8 +725,8 @@ async def lifespan(app: FastAPI):
 # ==============================================================================
 app = FastAPI(
     title="Lordera Controller Service",
-    description="Monitors Gateway queue and manages on-demand Akash GPU deployments.",
-    version="1.3.1",
+    description="Monitors Gateway queue and manages on-demand Akash GPU deployments via direct chain access.",
+    version="1.4.0",
     lifespan=lifespan,
 )
 
@@ -838,7 +774,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.3.1",
+        "version": "1.4.0",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
@@ -860,7 +796,7 @@ async def health_check():
         qwen_url=ctx.qwen_url,
         consecutive_errors=ctx.consecutive_errors,
         dry_run=DRY_RUN,
-        akash_key_set=bool(AKASH_API_KEY),
+        akash_key_set=bool(AKASH_MNEMONIC),
         uptime_seconds=int(time.time() - (ctx.last_gateway_check_at or time.time())),
     )
 
