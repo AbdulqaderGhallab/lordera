@@ -11,7 +11,7 @@ RUN pip3 install --retries 10 --timeout 120 \
         "akash" \
         "python-dotenv>=1.0.0" \
         "ecdsa>=0.18.0" \
-        "cosmospy==2.1.0" \
+        "cosmospy" \
         "grpcio>=1.60.0" \
         "protobuf>=4.25.0" \
         "aiohttp"
