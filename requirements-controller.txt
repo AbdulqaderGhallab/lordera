@@ -1,8 +1,9 @@
 fastapi
-uvicorn
+uvicorn[standard]
 httpx
 pydantic
-akash>=0.5.0
+pyyaml
+python-multipart
 ecdsa
 cosmospy
 grpcio

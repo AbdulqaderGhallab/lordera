@@ -1,75 +1,10 @@
-# ==============================================================================
-# Lordera AI — Unified Requirements
-# ==============================================================================
-# Shared by all four services:
-#   - gateway_service.py     →  fastapi, uvicorn, httpx, pydantic, multipart
-#   - whisper_service.py     →  + torch, torchaudio, whisperx
-#   - qwen_service.py        →  + transformers, bitsandbytes, accelerate
-#   - controller_service.py  →  fastapi, uvicorn, httpx, pydantic
-#
-# NOTE ON IMPLICIT DEPENDENCIES:
-#   numpy, safetensors, and huggingface-hub are installed automatically by
-#   torch, whisperx, and transformers respectively. They are intentionally
-#   left implicit to preserve Docker layer cache compatibility with prior
-#   builds — their versions remain pinned by upstream constraints.
-#
-# Version pinning policy:
-#   - torch/torchaudio: exact pins (must match CUDA 12.1.1 + cuDNN 8)
-#   - everything else:  bounded ranges (allow safe patch updates)
-# ==============================================================================
-
-
-# ------------------------------------------------------------------------------
-# 1. Web framework (shared by all services)
-# ------------------------------------------------------------------------------
-fastapi>=0.115.0
-uvicorn[standard]>=0.30.0
-python-multipart>=0.0.9
-pydantic>=2.8.0
-
-
-# ------------------------------------------------------------------------------
-# 2. Async HTTP client (Gateway ↔ Controller ↔ downstream)
-# ------------------------------------------------------------------------------
-httpx>=0.27.0
-
-
-# ------------------------------------------------------------------------------
-# 3. PyTorch stack (Whisper + Qwen)
-#    Pinned to match CUDA 12.1.1 + cuDNN 8 in the Docker base image.
-#    Do NOT bump without re-testing GPU compatibility on T4.
-# ------------------------------------------------------------------------------
-torch==2.3.1
-torchaudio==2.3.1
-
-
-# ------------------------------------------------------------------------------
-# 4. Hugging Face stack (Qwen Service)
-#    - transformers:   model loading + pipeline
-#    - accelerate:     device_map="auto" + faster loading
-#    - bitsandbytes:   4-bit NF4 quantization (essential for T4 16 GB)
-#    - sentencepiece:  tokenizer support
-#    - protobuf:       required by transformers for some backends
-# ------------------------------------------------------------------------------
-transformers>=4.45.0,<5.0.0
-accelerate>=0.33.0
-bitsandbytes>=0.43.0
-sentencepiece>=0.2.0
-protobuf>=4.25.0
-matplotlib>=3.8.0
-
-
-# ------------------------------------------------------------------------------
-# 5. WhisperX (Whisper Service)
-#    Transcription + VAD + alignment + bundled audio loaders.
-# ------------------------------------------------------------------------------
-whisperx>=3.1.1
-
-
-# ------------------------------------------------------------------------------
-# 6. Akash Controller - direct blockchain access (local Air, no API key)
-#    - akash: official Python SDK (pip install akash) for MsgCreate/CloseDeployment
-#    - python-dotenv: load AKASH_MNEMONIC from .env / GitHub Secrets
-# ------------------------------------------------------------------------------
-akash>=0.5.0
-python-dotenv>=1.0.0
+fastapi
+uvicorn[standard]
+httpx
+pydantic
+pyyaml
+python-multipart
+ecdsa
+cosmospy
+grpcio
+protobuf

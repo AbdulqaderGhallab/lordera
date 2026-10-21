@@ -45,9 +45,11 @@ import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
-from dotenv import load_dotenv
-
-load_dotenv()
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # Try Akash SDK - official PyPI: pip install akash
 try:
@@ -89,7 +91,7 @@ GATEWAY_ADMIN_TOKEN  = os.getenv("GATEWAY_ADMIN_TOKEN", "")
 
 # New - direct chain access (local Air)
 AKASH_MNEMONIC       = os.getenv("AKASH_MNEMONIC", "")
-AKASH_NODE           = os.getenv("AKASH_NODE", "https://rpc.akash.network:443")
+AKASH_NODE           = os.getenv("AKASH_NODE", "https://rpc.akashnet.net:443")
 AKASH_CHAIN_ID       = os.getenv("AKASH_CHAIN_ID", "akashnet-2")
 AKASH_TIMEOUT        = float(os.getenv("AKASH_TIMEOUT", "30.0"))
 AKASH_BIDS_TIMEOUT   = float(os.getenv("AKASH_BIDS_TIMEOUT", "90.0"))

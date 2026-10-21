@@ -3,7 +3,7 @@ version: "2.0"
 
 services:
   gateway:
-    image: abdulqaderghallab/lordera-gateway:v2
+    image: abdulqaderghallab/lordera-gateway:v3
     env:
       - "WHISPER_SERVICE_URL=http://localhost:8001"
       - "QWEN_SERVICE_URL=http://localhost:8002"
@@ -30,12 +30,12 @@ services:
           - global: true
 
   controller:
-    image: abdulqaderghallab/lordera-controller:v2
+    image: abdulqaderghallab/lordera-controller:v3
     env:
-      - "GATEWAY_URL=https://0u9u53p4n98fp7fllvbs4fnmpk.ingress.akash.rhite.co.uk"
+      - "GATEWAY_URL=http://gateway:8000"
       - "GATEWAY_ADMIN_TOKEN=sec_adm_tok_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t"
       - "AKASH_MNEMONIC=spray more old swing service clap satoshi name apart notable soon install erode wide sniff sketch feel ride picture senior summer grunt seed dutch"
-      - "AKASH_NODE=https://rpc.akash.network:443"
+      - "AKASH_NODE=https://rpc.akashnet.net:443"
       - "AKASH_CHAIN_ID=akashnet-2"
       - "AKASH_HD_PATH=m/44'/118'/0'/0/0"
       - "AKASH_GAS=auto"
