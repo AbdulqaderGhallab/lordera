@@ -53,12 +53,23 @@ load_dotenv()
 try:
     from akash import AkashClient
     try:
-        from akash import SDL
+        from akash import AkashWallet
     except ImportError:
-        SDL = None
+        AkashWallet = None
+    SDL = None
     SDK_AVAILABLE = True
-except ImportError:
-    SDK_AVAILABLE = False
+except Exception as e:
+    try:
+        from akash.client import AkashClient
+        from akash.wallet import AkashWallet
+        SDL = None
+        SDK_AVAILABLE = True
+    except Exception as e2:
+        print(f"Akash SDK import failed: {e} | {e2}")
+        AkashClient = None
+        AkashWallet = None
+        SDL = None
+        SDK_AVAILABLE = False
 
 # ==============================================================================
 # Logging
