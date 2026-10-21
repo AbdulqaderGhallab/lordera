@@ -1,18 +1,6 @@
 # ==============================================================================
 # Lordera AI — Lightweight Dockerfile for CPU-only services
 # ==============================================================================
-# Used ONLY for: gateway_service and controller_service
-# These services do NOT use PyTorch, CUDA, WhisperX, or Transformers.
-#
-# Benefits:
-#   • Build time:   ~2 minutes (vs ~3 hours)
-#   • Image size:   ~250 MB    (vs ~16 GB)
-#   • Akash deploy: ~30 seconds (vs ~15 minutes)
-#
-# CHANGELOG:
-#   • v3: Added akash and python-dotenv for Controller's direct chain access.
-# ==============================================================================
-
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -28,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         curl \
     && rm -rf /var/lib/apt/lists/*
 
-# CPU-only requirements — every constraint quoted to avoid shell redirection
+# CPU-only requirements
 RUN pip3 install --retries 10 --timeout 120 \
         "fastapi>=0.115.0" \
         "uvicorn[standard]>=0.30.0" \
@@ -38,12 +26,12 @@ RUN pip3 install --retries 10 --timeout 120 \
         "akash>=0.5.0" \
         "python-dotenv>=1.0.0"
 
-# Copy service code + SDL (for controller)
-COPY gateway_service.py .
-COPY controller_service.py .
-COPY gpu.yaml .
+# نسخ كل الكود الموجود - ما يفشل لو ملف ناقص
+COPY . .
 
-# Create models dir placeholder (not used but consistent with other images)
+# لو gpu.yaml مو موجود، سوي واحد فاضي عشان ما يفشل الـ controller
+RUN if [ ! -f /app/gpu.yaml ]; then echo 'services: {}' > /app/gpu.yaml; fi
+
 RUN mkdir -p /models
 
 ARG SERVICE=gateway_service
