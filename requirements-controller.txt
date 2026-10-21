@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+httpx
+pydantic
+akash>=0.5.0
+ecdsa
+cosmospy
+grpcio
+protobuf
