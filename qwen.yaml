@@ -32,7 +32,7 @@ profiles:
             size: 30Gi
             attributes:
               persistent: true
-              class: beta2
+              class: beta3
         gpu:
           units: 1
           attributes:
@@ -44,7 +44,7 @@ profiles:
       pricing:
         qwen:
           denom: uact
-          amount: 500000
+          amount: 2500
 
 deployment:
   qwen:

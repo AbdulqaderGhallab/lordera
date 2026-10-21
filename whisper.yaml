@@ -45,7 +45,7 @@ profiles:
       pricing:
         whisper:
           denom: uact
-          amount: 800
+          amount: 2500
 
 deployment:
   whisper:
