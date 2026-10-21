@@ -19,6 +19,8 @@ jobs:
         run: |
           docker build --build-arg SERVICE=whisper_service --build-arg PORT=8001 -t abdulqaderghallab/lordera-whisper:v2 .
           docker push abdulqaderghallab/lordera-whisper:v2
+          docker tag abdulqaderghallab/lordera-whisper:v2 abdulqaderghallab/lordera-whisper:latest
+          docker push abdulqaderghallab/lordera-whisper:latest
 
   build-qwen:
     runs-on: ubuntu-latest
@@ -33,3 +35,37 @@ jobs:
         run: |
           docker build --build-arg SERVICE=qwen_service --build-arg PORT=8002 -t abdulqaderghallab/lordera-qwen:v2 .
           docker push abdulqaderghallab/lordera-qwen:v2
+          docker tag abdulqaderghallab/lordera-qwen:v2 abdulqaderghallab/lordera-qwen:latest
+          docker push abdulqaderghallab/lordera-qwen:latest
+
+  build-gateway:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+      - name: Build and push gateway
+        run: |
+          docker build -f Dockerfile.light --build-arg SERVICE=gateway_service --build-arg PORT=8000 -t abdulqaderghallab/lordera-gateway:v2 .
+          docker push abdulqaderghallab/lordera-gateway:v2
+          docker tag abdulqaderghallab/lordera-gateway:v2 abdulqaderghallab/lordera-gateway:latest
+          docker push abdulqaderghallab/lordera-gateway:latest
+
+  build-controller:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
+      - name: Build and push controller
+        run: |
+          docker build -f Dockerfile.light --build-arg SERVICE=controller_service --build-arg PORT=8003 -t abdulqaderghallab/lordera-controller:v2 .
+          docker push abdulqaderghallab/lordera-controller:v2
+          docker tag abdulqaderghallab/lordera-controller:v2 abdulqaderghallab/lordera-controller:latest
+          docker push abdulqaderghallab/lordera-controller:latest
