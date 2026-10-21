@@ -51,7 +51,11 @@ load_dotenv()
 
 # Try Akash SDK - official PyPI: pip install akash
 try:
-    from akash import AkashClient, SDL
+    from akash import AkashClient
+    try:
+        from akash import SDL
+    except ImportError:
+        SDL = None
     SDK_AVAILABLE = True
 except ImportError:
     SDK_AVAILABLE = False

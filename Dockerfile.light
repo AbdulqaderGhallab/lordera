@@ -1,22 +1,7 @@
-# ==============================================================================
-# Lordera AI — Lightweight Dockerfile for CPU-only services
-# ==============================================================================
 FROM python:3.11-slim
-
-ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    PIP_DEFAULT_TIMEOUT=120
-
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_DEFAULT_TIMEOUT=120
 WORKDIR /app
-
-# Minimal system deps — only curl for healthcheck
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# CPU-only requirements
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
 RUN pip3 install --retries 10 --timeout 120 \
         "fastapi>=0.115.0" \
         "uvicorn[standard]>=0.30.0" \
@@ -24,25 +9,18 @@ RUN pip3 install --retries 10 --timeout 120 \
         "pydantic>=2.8.0" \
         "httpx>=0.27.0" \
         "akash>=0.5.0" \
-        "python-dotenv>=1.0.0"
-
-# نسخ كل الكود الموجود - ما يفشل لو ملف ناقص
+        "python-dotenv>=1.0.0" \
+        "ecdsa>=0.18.0" \
+        "cosmospy" \
+        "grpcio>=1.60.0" \
+        "protobuf>=4.25.0" \
+        "aiohttp"
 COPY . .
-
-# لو gpu.yaml مو موجود، سوي واحد فاضي عشان ما يفشل الـ controller
 RUN if [ ! -f /app/gpu.yaml ]; then echo 'services: {}' > /app/gpu.yaml; fi
-
 RUN mkdir -p /models
-
 ARG SERVICE=gateway_service
 ARG PORT=8000
-
-ENV SERVICE=${SERVICE} \
-    PORT=${PORT}
-
+ENV SERVICE=${SERVICE} PORT=${PORT}
 EXPOSE ${PORT}
-
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
-    CMD curl -f http://localhost:${PORT}/health || exit 1
-
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD curl -f http://localhost:${PORT}/health || exit 1
 CMD ["sh", "-c", "uvicorn ${SERVICE}:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]
