@@ -947,4 +947,4 @@ async def process_audio_legacy(request: Request, file: UploadFile = File(...)):
 # Run (for local development)
 # ==============================================================================
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000)# rebuild trigger
