@@ -1,0 +1,78 @@
+---
+version: "2.0"
+
+services:
+  whisper:
+    image: abdulqaderghallab/lordera-whisper:v3
+    env:
+      - "WHISPER_MODEL_NAME=large-v3"
+      - "MODEL_DIR=/models"
+      - "INTERNAL_TOKEN=sec_int_tok_9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a"
+      - "WHISPER_COMPUTE_TYPE=float16"
+    params:
+      storage:
+        whisper-models:
+          mount: /models
+    expose:
+      - port: 8001
+        as: 80
+        to:
+          - global: true
+
+  qwen:
+    image: abdulqaderghallab/lordera-qwen:v3
+    env:
+      - "QWEN_MODEL_NAME=Qwen/Qwen2.5-7B-Instruct"
+      - "MODEL_DIR=/models"
+      - "INTERNAL_TOKEN=sec_int_tok_9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a"
+    params:
+      storage:
+        qwen-models:
+          mount: /models
+    expose:
+      - port: 8002
+        as: 80
+        to:
+          - global: true
+
+profiles:
+  compute:
+    gpu-group:
+      resources:
+        cpu:
+          units: 4.0
+        memory:
+          size: 32Gi
+        storage:
+          - size: 40Gi
+          - name: whisper-models
+            size: 30Gi
+            attributes:
+              persistent: true
+              class: beta3
+          - name: qwen-models
+            size: 30Gi
+            attributes:
+              persistent: true
+              class: beta3
+        gpu:
+          units: 1
+          attributes:
+            vendor:
+              nvidia: []
+  placement:
+    akash:
+      pricing:
+        gpu-group:
+          denom: uact
+          amount: 5000
+
+deployment:
+  whisper:
+    akash:
+      profile: gpu-group
+      count: 1
+  qwen:
+    akash:
+      profile: gpu-group
+      count: 1
