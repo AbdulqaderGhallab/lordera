@@ -1,10 +1,10 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.1 (CLI-Driven)
+Lordera AI — Controller Service v1.6.2 (CLI-Driven)
 ==============================================================================
-CHANGELOG v1.6.0 -> v1.6.1:
-  • Removed `--fees 20000uakt` from tx commands to prevent conflict with
-    `AKASH_GAS_PRICES` environment variable (Error: cannot provide both fees and gas prices).
+CHANGELOG v1.6.1 -> v1.6.2:
+  • Fixed parsing of the deployment list. Akash CLI returns the DSEQ under 
+    'deployment.id.dseq' instead of 'deployment.deployment_id.dseq'.
 ==============================================================================
 """
 import os
@@ -336,10 +336,24 @@ class AkashCLI:
                 logger.error("No active deployments found after creation.")
                 return None
             
-            deployments.sort(key=lambda x: int(x.get("deployment", {}).get("deployment_id", {}).get("dseq", 0)), reverse=True)
-            dseq = deployments[0]["deployment"]["deployment_id"]["dseq"]
+            # Robust parsing to handle both 'id' and 'deployment_id'
+            def get_dseq(dep):
+                d = dep.get("deployment", {})
+                id_obj = d.get("id") or d.get("deployment_id") or {}
+                return int(id_obj.get("dseq", 0))
+
+            deployments.sort(key=get_dseq, reverse=True)
+            
+            best_dep = deployments[0].get("deployment", {})
+            best_id = best_dep.get("id") or best_dep.get("deployment_id") or {}
+            dseq = str(best_id.get("dseq", ""))
+            
+            if not dseq:
+                logger.error(f"Could not extract dseq from {deployments[0]}")
+                return None
+                
             logger.info(f"Created deployment -> DSEQ {dseq}")
-            return str(dseq)
+            return dseq
         except Exception as e:
             logger.error(f"Failed to parse deployment list: {e}")
             return None
@@ -777,7 +791,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.1 starting (CLI-Driven)")
+    logger.info("Lordera Controller v1.6.2 starting (CLI-Driven)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -820,7 +834,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.1",
+    version="1.6.2",
     lifespan=lifespan,
 )
 
@@ -868,7 +882,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.1",
+        "version": "1.6.2",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
