@@ -36,7 +36,7 @@ services:
   controller:
     image: abdulqaderghallab/lordera-controller:v5
     env:
-      - "GATEWAY_URL=http://127.0.0.1:8000"
+      - "GATEWAY_URL=http://localhost:8000"
       - "GATEWAY_ADMIN_TOKEN=sec_adm_tok_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t"
       - "AKASH_MNEMONIC=spray more old swing service clap satoshi name apart notable soon install erode wide sniff sketch feel ride picture senior summer grunt seed dutch"
       - "AKASH_NODE=https://rpc.akashnet.net:443"
