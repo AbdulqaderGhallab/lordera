@@ -6,9 +6,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  # ==========================================
-  # 1. Build Whisper (GPU Heavy)
-  # ==========================================
   build-whisper:
     runs-on: ubuntu-latest
     steps:
@@ -49,9 +46,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ==========================================
-  # 2. Build Qwen (GPU Heavy)
-  # ==========================================
   build-qwen:
     runs-on: ubuntu-latest
     steps:
@@ -92,9 +86,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ==========================================
-  # 3. Build Gateway (Light)
-  # ==========================================
   build-gateway:
     runs-on: ubuntu-latest
     steps:
@@ -124,9 +115,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-  # ==========================================
-  # 4. Build Controller (Light image with Akash CLI)
-  # ==========================================
   build-controller:
     runs-on: ubuntu-latest
     steps:
@@ -145,13 +133,13 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile.light  # <--- تم التعديل هنا
+          file: ./Dockerfile.light
           build-args: |
             SERVICE=controller_service
             PORT=8003
           push: true
           tags: |
-            abdulqaderghallab/lordera-controller:v5  # <--- تم التعديل هنا
+            abdulqaderghallab/lordera-controller:v5
             abdulqaderghallab/lordera-controller:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
