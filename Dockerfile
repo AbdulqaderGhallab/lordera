@@ -1,5 +1,5 @@
 # ==============================================================================
-# Lordera AI — Unified Dockerfile (v3.2 - FIXED)
+# Lordera AI — Unified Dockerfile (v3.3 - FIXED)
 # ==============================================================================
 # Builds ALL FOUR service images from a single file
 #   docker build --build-arg SERVICE=whisper_service    --build-arg PORT=8001 -t abdulqaderghallab/lordera-whisper:v3    .
@@ -21,7 +21,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 1- تثبيت الحزم الأساسية أولاً (بما فيها curl و ca-certificates)
+# 1- تثبيت الحزم الأساسية أولاً (بما فيها curl, ca-certificates, unzip)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -33,9 +33,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
     ca-certificates \
     jq \
+    unzip \
     && rm -rf /var/lib/apt/lists/*
 
-# 2- تحميل وتثبيت Akash & Provider-Services (بعد التأكد من وجود curl)
+# 2- تحميل وتثبيت Akash & Provider-Services (بعد التأكد من وجود curl و unzip)
 RUN curl -sSfL https://raw.githubusercontent.com/akash-network/node/main/install.sh | bash \
     && curl -sSfL https://raw.githubusercontent.com/akash-network/provider/main/install.sh | bash \
     && mv ./bin/akash /usr/local/bin/akash \
