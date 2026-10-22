@@ -1,4 +1,4 @@
-﻿﻿name: Build and Push Lordera Images
+﻿name: Build and Push Lordera Images
 
 on:
   push:
@@ -145,7 +145,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile  # <--- تم التعديل هنا: استخدام Dockerfile بدلاً من Dockerfile.light
+          file: ./Dockerfile
           build-args: |
             SERVICE=controller_service
             PORT=8003
