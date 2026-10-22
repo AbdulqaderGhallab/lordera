@@ -125,7 +125,7 @@ jobs:
             PORT=8003
           push: true
           tags: |
-            abdulqaderghallab/lordera-controller:v6
+            abdulqaderghallab/lordera-controller:v7
             abdulqaderghallab/lordera-controller:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

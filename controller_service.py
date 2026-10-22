@@ -1,11 +1,10 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.0 (CLI-Driven)
+Lordera AI — Controller Service v1.6.1 (CLI-Driven)
 ==============================================================================
-CHANGELOG v1.5.0 -> v1.6.0:
-  • Added automatic Akash client certificate generation and publishing.
-  • This fixes the "could not open certificate PEM file" error when creating
-    a new deployment for the first time.
+CHANGELOG v1.6.0 -> v1.6.1:
+  • Removed `--fees 20000uakt` from tx commands to prevent conflict with
+    `AKASH_GAS_PRICES` environment variable (Error: cannot provide both fees and gas prices).
 ==============================================================================
 """
 import os
@@ -306,7 +305,6 @@ class AkashCLI:
             "--from", self.wallet_name,
             "--node", self.node,
             "--chain-id", self.chain_id,
-            "--fees", "20000uakt",
             "--gas", "500000",
             "-y",
             "--keyring-backend", "test",
@@ -406,7 +404,6 @@ class AkashCLI:
             "--from", self.wallet_name,
             "--node", self.node,
             "--chain-id", self.chain_id,
-            "--fees", "20000uakt",
             "--gas", "500000",
             "-y",
             "--keyring-backend", "test"
@@ -509,7 +506,6 @@ class AkashCLI:
             "--from", self.wallet_name,
             "--node", self.node,
             "--chain-id", self.chain_id,
-            "--fees", "20000uakt",
             "--gas", "500000",
             "-y",
             "--keyring-backend", "test"
@@ -781,7 +777,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.0 starting (CLI-Driven)")
+    logger.info("Lordera Controller v1.6.1 starting (CLI-Driven)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -824,7 +820,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.0",
+    version="1.6.1",
     lifespan=lifespan,
 )
 
@@ -872,7 +868,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.0",
+        "version": "1.6.1",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
