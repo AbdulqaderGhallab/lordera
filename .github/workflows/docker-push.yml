@@ -125,7 +125,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ==========================================
-  # 4. Build Controller (Full image with Akash CLI)
+  # 4. Build Controller (Light image with Akash CLI)
   # ==========================================
   build-controller:
     runs-on: ubuntu-latest
@@ -145,13 +145,13 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile
+          file: ./Dockerfile.light  # <--- تم التعديل هنا
           build-args: |
             SERVICE=controller_service
             PORT=8003
           push: true
           tags: |
-            abdulqaderghallab/lordera-controller:v4
+            abdulqaderghallab/lordera-controller:v5  # <--- تم التعديل هنا
             abdulqaderghallab/lordera-controller:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

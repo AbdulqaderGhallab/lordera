@@ -1,26 +1,56 @@
 FROM python:3.11-slim
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 PIP_NO_CACHE_DIR=1 PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_DEFAULT_TIMEOUT=120
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_DEFAULT_TIMEOUT=120
+
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+
+# 1- تثبيت الأدوات الأساسية + أدوات فك الضغط المطلوبة لسكربت Akash
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    unzip \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2- تحميل وتثبيت Akash و Provider-Services CLI
+RUN curl -sSfL https://raw.githubusercontent.com/akash-network/node/main/install.sh | bash \
+    && curl -sSfL https://raw.githubusercontent.com/akash-network/provider/main/install.sh | bash \
+    && mv ./bin/akash /usr/local/bin/akash \
+    && mv ./bin/provider-services /usr/local/bin/provider-services \
+    && chmod +x /usr/local/bin/akash /usr/local/bin/provider-services \
+    && rm -rf ./bin
+
+# 3- تثبيت متطلبات بايثون (بدون حزمة akash المعطلة)
 RUN pip3 install --retries 10 --timeout 120 \
         "fastapi>=0.115.0" \
         "uvicorn[standard]>=0.30.0" \
         "python-multipart>=0.0.9" \
         "pydantic>=2.8.0" \
         "httpx>=0.27.0" \
-        "akash" \
         "python-dotenv>=1.0.0" \
         "ecdsa>=0.18.0" \
         "cosmospy" \
         "grpcio>=1.60.0" \
         "protobuf>=4.25.0" \
         "aiohttp"
+
+# 4- نسخ الكود
 COPY . .
+
 RUN if [ ! -f /app/gpu.yaml ]; then echo 'services: {}' > /app/gpu.yaml; fi
-RUN mkdir -p /models
+RUN mkdir -p /models /state
+
 ARG SERVICE=gateway_service
 ARG PORT=8000
 ENV SERVICE=${SERVICE} PORT=${PORT}
+
 EXPOSE ${PORT}
-HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 CMD curl -f http://localhost:${PORT}/health || exit 1
-CMD ["sh", "-c", "uvicorn ${SERVICE}:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD curl -f http://localhost:${PORT}/health || exit 1
+
+# استخدام exec لضمان استقبال إشارات الإيقاف بشكل سليم
+CMD ["sh", "-c", "exec python3 -m uvicorn ${SERVICE}:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]
