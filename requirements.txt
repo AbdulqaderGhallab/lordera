@@ -1,10 +1,33 @@
+# ==============================================================================
+# Core Web & API Dependencies
+# ==============================================================================
 fastapi
 uvicorn[standard]
 httpx
 pydantic
 pyyaml
 python-multipart
+python-dotenv
+aiohttp
+
+# ==============================================================================
+# Controller & Blockchain Dependencies
+# ==============================================================================
 ecdsa
 cosmospy
 grpcio
 protobuf
+
+# ==============================================================================
+# AI/ML Dependencies (For Whisper & Qwen)
+# ==============================================================================
+# PyTorch & Audio Processing
+torch
+torchaudio
+whisperx
+
+# Transformers & Quantization (For Qwen)
+transformers
+accelerate
+bitsandbytes
+sentencepiece

@@ -1,33 +1,17 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.4.0 (Local Air)
+Lordera AI — Controller Service v1.5.0 (CLI-Driven)
 ==============================================================================
 ROLE:
   Monitor Gateway queue and manage GPU deployment lifecycle on Akash
-  via direct blockchain access (mnemonic, no Console API key).
-  Cost saver: ~$108 -> ~$8-20/month.
+  via direct CLI execution (akash + provider-services).
 
-CHANGE v1.3.1 -> v1.4.0:
-  • Removed Console API (x-api-key)
-  • Added direct chain client using akash SDK + AKASH_MNEMONIC
-  • Full control: create = start, close = full stop/delete
-  • Works with local Akash Air, no central console needed
-
-STATE MACHINE:
-    ┌────────┐  queue>0   ┌──────────┐  ready   ┌─────────┐
-    │  IDLE  │ ─────────► │ STARTING │ ───────► │ RUNNING │
-    └────────┘            └──────────┘          └─────────┘
-        ▲                                           │
-        │              ┌──────────┐                 │
-        └──────────────│ STOPPING │◄────────────────┘
-                       └──────────┘
-
-DESIGN:
-  1. Never crash   -> try/except on external calls
-  2. Never hang    -> hard timeouts
-  3. No flip-flop  -> cooldowns
-  4. Recoverable   -> persist dseq to disk
-  5. Testable      -> DRY_RUN mode
+CHANGE v1.4.0 -> v1.5.0:
+  • Removed the deprecated akash Python SDK completely.
+  • Now uses `asyncio.subprocess` to execute the exact CLI commands
+    proven to work (akash tx deployment create, provider-services send-manifest, etc.).
+  • Automatically imports the wallet from mnemonic into the test keyring.
+  • Robust JSON parsing directly from CLI outputs.
 ==============================================================================
 """
 import os
@@ -35,43 +19,23 @@ import json
 import time
 import logging
 import asyncio
+import shutil
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, asdict
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 import httpx
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 import uvicorn
+
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
-
-# Try Akash SDK - official PyPI: pip install akash
-try:
-    from akash import AkashClient
-    try:
-        from akash import AkashWallet
-    except ImportError:
-        AkashWallet = None
-    SDL = None
-    SDK_AVAILABLE = True
-except Exception as e:
-    try:
-        from akash.client import AkashClient
-        from akash.wallet import AkashWallet
-        SDL = None
-        SDK_AVAILABLE = True
-    except Exception as e2:
-        print(f"Akash SDK import failed: {e} | {e2}")
-        AkashClient = None
-        AkashWallet = None
-        SDL = None
-        SDK_AVAILABLE = False
 
 # ==============================================================================
 # Logging
@@ -89,11 +53,11 @@ logger = logging.getLogger("controller")
 GATEWAY_URL          = os.getenv("GATEWAY_URL", "http://gateway:8000")
 GATEWAY_ADMIN_TOKEN  = os.getenv("GATEWAY_ADMIN_TOKEN", "")
 
-# New - direct chain access (local Air)
+# CLI Based Access
 AKASH_MNEMONIC       = os.getenv("AKASH_MNEMONIC", "")
 AKASH_NODE           = os.getenv("AKASH_NODE", "https://rpc.akashnet.net:443")
 AKASH_CHAIN_ID       = os.getenv("AKASH_CHAIN_ID", "akashnet-2")
-AKASH_TIMEOUT        = float(os.getenv("AKASH_TIMEOUT", "30.0"))
+AKASH_TIMEOUT        = float(os.getenv("AKASH_TIMEOUT", "60.0"))
 AKASH_BIDS_TIMEOUT   = float(os.getenv("AKASH_BIDS_TIMEOUT", "90.0"))
 AKASH_BIDS_INTERVAL  = float(os.getenv("AKASH_BIDS_INTERVAL", "5.0"))
 AKASH_RUNTIME_LIMIT  = os.getenv("AKASH_RUNTIME_LIMIT_HOURS", "4")
@@ -111,6 +75,10 @@ URI_POLL_INTERVAL    = float(os.getenv("CONTROLLER_URI_POLL_INTERVAL", "10.0"))
 
 DRY_RUN              = os.getenv("CONTROLLER_DRY_RUN", "false").lower() == "true"
 STATE_FILE           = os.getenv("CONTROLLER_STATE_FILE", "/tmp/controller_state.json")
+
+# Check CLI availability
+AKASH_AVAILABLE = shutil.which("akash") is not None
+PROVIDER_SERVICES_AVAILABLE = shutil.which("provider-services") is not None
 
 
 # ==============================================================================
@@ -240,208 +208,311 @@ async def push_downstream_urls(whisper_url: str, qwen_url: str) -> bool:
 
 
 # ==============================================================================
-# Akash Direct Client (Local Air - no API key)
+# Akash CLI Client
 # ==============================================================================
-class AkashAPI:
-    """Direct blockchain client using mnemonic. Full start/stop control."""
+class AkashCLI:
+    """Direct CLI execution for Akash. Replaces broken Python SDK."""
 
     def __init__(self, dry_run: bool = False):
         self.dry_run = dry_run
         self.mnemonic = os.getenv("AKASH_MNEMONIC", "") or AKASH_MNEMONIC
         self.node = AKASH_NODE
         self.chain_id = AKASH_CHAIN_ID
-        self.client = None
+        self.wallet_name = "controller-wallet"
+        self.wallet_address = ""
+        self._initialized = False
 
+    async def _run_cmd(self, cmd: List[str], input_data: str = None) -> Tuple[int, str, str]:
+        logger.debug(f"Running: {' '.join(cmd)}")
+        proc = await asyncio.create_subprocess_exec(
+            *cmd,
+            stdin=asyncio.subprocess.PIPE if input_data else None,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await proc.communicate(input_data.encode() if input_data else None)
+        return proc.returncode, stdout.decode(), stderr.decode()
+
+    async def _ensure_initialized(self) -> bool:
         if self.dry_run:
-            logger.info("DRY_RUN enabled - no real chain calls")
-            return
+            self._initialized = True
+            self.wallet_address = "akash1dryrun"
+            return True
+            
+        if self._initialized:
+            return True
 
-        if not SDK_AVAILABLE:
-            logger.error("akash SDK not installed. Run: pip install akash")
-            return
+        if not AKASH_AVAILABLE or not PROVIDER_SERVICES_AVAILABLE:
+            logger.error("CLI tools missing! Ensure 'akash' and 'provider-services' are installed in the container.")
+            return False
 
         if not self.mnemonic:
-            logger.warning("AKASH_MNEMONIC not set - chain calls will fail")
-            return
+            logger.error("AKASH_MNEMONIC is not set.")
+            return False
 
-        try:
-            # SDK init - sync
-            self.client = AkashClient.from_mnemonic(
-                mnemonic=self.mnemonic,
-                node=self.node,
-                chain_id=self.chain_id,
+        # Import key into test keyring
+        rc, out, err = await self._run_cmd(["akash", "keys", "show", self.wallet_name, "-a", "--keyring-backend", "test"])
+        if rc != 0:
+            logger.info(f"Importing wallet {self.wallet_name} from mnemonic...")
+            rc, out, err = await self._run_cmd(
+                ["akash", "keys", "add", self.wallet_name, "--recover", "--keyring-backend", "test"],
+                input_data=self.mnemonic + "\n"
             )
-            logger.info(f"Connected to Akash chain: {self.chain_id} via {self.node}")
-        except Exception as e:
-            logger.error(f"Failed to init AkashClient: {e}")
+            if rc != 0:
+                logger.error(f"Failed to import wallet: {err}")
+                return False
 
-    # ---------------------------------------------------------------- create
+        self.wallet_address = out.strip()
+        self._initialized = True
+        logger.info(f"Wallet {self.wallet_name} initialized: {self.wallet_address}")
+        return True
+
     async def create_deployment(self, sdl_yaml: str) -> Optional[str]:
         if self.dry_run:
-            fake = f"DRYRUN-{int(time.time())}"
-            logger.info(f"[DRY-RUN] Would create deployment -> DSEQ {fake}")
-            return fake
+            logger.info(f"[DRY-RUN] Would create deployment")
+            return f"DRYRUN-{int(time.time())}"
 
-        if not self.client:
-            logger.error("Akash client not initialized")
+        if not await self._ensure_initialized():
             return None
 
+        sdl_path = "/tmp/gpu_sdl.yaml"
+        with open(sdl_path, "w") as f:
+            f.write(sdl_yaml)
+
+        cmd = [
+            "akash", "tx", "deployment", "create", sdl_path,
+            "--from", self.wallet_name,
+            "--node", self.node,
+            "--chain-id", self.chain_id,
+            "--fees", "20000uakt",
+            "--gas", "500000",
+            "-y",
+            "--keyring-backend", "test",
+            "-o", "json"
+        ]
+        rc, out, err = await self._run_cmd(cmd)
+        if rc != 0:
+            logger.error(f"create_deployment failed: {err}")
+            return None
+
+        # Wait for tx to be indexed
+        await asyncio.sleep(5)
+        
+        # Query the latest active deployment to get dseq
+        cmd = [
+            "akash", "query", "deployment", "list",
+            "--owner", self.wallet_address,
+            "--node", self.node,
+            "--state", "active",
+            "-o", "json"
+        ]
+        rc, out, err = await self._run_cmd(cmd)
+        if rc != 0:
+            logger.error(f"Query deployments failed: {err}")
+            return None
+            
         try:
-            sdl = SDL.from_yaml(sdl_yaml)
-            deployment = await asyncio.to_thread(self.client.create_deployment, sdl)
-            
-            # Robust DSEQ extraction
-            dseq = ""
-            if hasattr(deployment, 'id') and hasattr(deployment.id, 'dseq'):
-                dseq = str(deployment.id.dseq)
-            elif isinstance(deployment, dict):
-                dseq = str(deployment.get('dseq') or deployment.get('data', {}).get('dseq') or '')
-            else:
-                # Fallback: try fetching recent deployments
-                deps = await asyncio.to_thread(self.client.fetch_deployments)
-                if deps:
-                    dseq = str(getattr(deps[0], 'dseq', ''))
-            
-            if not dseq:
-                logger.error(f"Could not extract DSEQ from response: {deployment}")
+            data = json.loads(out)
+            deployments = data.get("deployments", [])
+            if not deployments:
+                logger.error("No active deployments found after creation.")
                 return None
-
+            
+            # Sort by dseq descending
+            deployments.sort(key=lambda x: int(x.get("deployment", {}).get("deployment_id", {}).get("dseq", 0)), reverse=True)
+            dseq = deployments[0]["deployment"]["deployment_id"]["dseq"]
             logger.info(f"Created deployment -> DSEQ {dseq}")
-            return dseq
+            return str(dseq)
         except Exception as e:
-            logger.error(f"create_deployment failed: {type(e).__name__}: {e}")
+            logger.error(f"Failed to parse deployment list: {e}")
             return None
 
-    # ---------------------------------------------------------------- bids
     async def fetch_bids(self, dseq: str) -> List[Dict[str, Any]]:
         if self.dry_run:
-            return [{"bid": {"id": {
-                "owner": "akash1dryrun", "dseq": dseq,
-                "gseq": 1, "oseq": 1,
-                "provider": "akash1dryprovider", "bseq": 1,
-            }, "state": "open",
-               "price": {"denom": "uakt", "amount": "1000"}}}]
+            return [{"bid": {"id": {"gseq": 1, "oseq": 1, "provider": "akash1dryprovider"}, "price": {"amount": "1000"}}}]
 
-        if not self.client:
+        if not await self._ensure_initialized():
+            return []
+
+        cmd = [
+            "akash", "query", "market", "bid", "list",
+            "--owner", self.wallet_address,
+            "--dseq", str(dseq),
+            "--node", self.node,
+            "-o", "json"
+        ]
+        rc, out, err = await self._run_cmd(cmd)
+        if rc != 0:
+            logger.warning(f"fetch_bids failed: {err}")
             return []
 
         try:
-            bids = await asyncio.to_thread(self.client.fetch_bids, dseq)
+            data = json.loads(out)
+            bids = data.get("bids", [])
             result = []
             for b in bids:
-                # Safely parse SDK objects to dicts
-                bid_obj = getattr(b, 'bid', b)
-                bid_id = getattr(bid_obj, 'bid_id', getattr(b, 'bid_id', None))
-                
-                if bid_id:
-                    gseq = getattr(bid_id, 'gseq', 1)
-                    oseq = getattr(bid_id, 'oseq', 1)
-                    provider = getattr(bid_id, 'provider', '')
-                else:
-                    gseq, oseq, provider = 1, 1, ""
-                
-                price_obj = getattr(bid_obj, 'price', getattr(b, 'price', None))
-                amount = getattr(price_obj, 'amount', '1000') if price_obj else '1000'
-
+                bid_id = b.get("bid", {}).get("bid_id", {})
+                price = b.get("bid", {}).get("price", {})
                 result.append({
                     "bid": {
-                        "id": {"gseq": gseq, "oseq": oseq, "provider": provider},
-                        "price": {"amount": str(amount)}
+                        "id": {
+                            "gseq": int(bid_id.get("gseq", 1)),
+                            "oseq": int(bid_id.get("oseq", 1)),
+                            "provider": bid_id.get("provider", "")
+                        },
+                        "price": {
+                            "amount": price.get("amount", "10000")
+                        }
                     }
                 })
             return result
         except Exception as e:
-            logger.warning(f"fetch_bids failed: {e}")
+            logger.warning(f"Failed to parse bids: {e}")
             return []
 
-    # ---------------------------------------------------------------- lease
     async def create_lease(self, dseq: str, gseq: int, oseq: int, provider: str) -> bool:
         if self.dry_run:
             logger.info(f"[DRY-RUN] Would create lease dseq={dseq} provider={provider}")
             return True
 
-        if not self.client:
+        if not await self._ensure_initialized():
             return False
 
-        try:
-            await asyncio.to_thread(self.client.create_lease, dseq, gseq, oseq, provider)
-            logger.info(f"Lease created dseq={dseq} provider={provider}")
-            return True
-        except Exception as e:
-            logger.error(f"create_lease failed: {e}")
+        # 1. Create Lease
+        cmd = [
+            "akash", "tx", "market", "lease", "create",
+            "--dseq", str(dseq),
+            "--gseq", str(gseq),
+            "--oseq", str(oseq),
+            "--provider", provider,
+            "--from", self.wallet_name,
+            "--node", self.node,
+            "--chain-id", self.chain_id,
+            "--fees", "20000uakt",
+            "--gas", "500000",
+            "-y",
+            "--keyring-backend", "test"
+        ]
+        rc, out, err = await self._run_cmd(cmd)
+        if rc != 0:
+            logger.error(f"create_lease failed: {err}")
             return False
+        
+        logger.info(f"Lease created dseq={dseq} provider={provider}")
 
-    # ---------------------------------------------------------------- get (Lease Status)
+        # 2. Send Manifest
+        sdl_path = "/tmp/gpu_sdl.yaml"
+        cmd = [
+            "provider-services", "send-manifest", sdl_path,
+            "--dseq", str(dseq),
+            "--provider", provider,
+            "--from", self.wallet_name,
+            "--node", self.node,
+            "--home", os.path.expanduser("~/.akash"),
+            "--keyring-backend", "test"
+        ]
+        rc, out, err = await self._run_cmd(cmd)
+        if rc != 0:
+            logger.error(f"send-manifest failed: {err}")
+            return False
+            
+        logger.info(f"Manifest sent successfully for dseq={dseq}")
+        return True
+
     async def get_deployment(self, dseq: str) -> Optional[Dict[str, Any]]:
         if self.dry_run:
-            return {"leases": [{"status": {"services": {
-                "whisper": {"uris": ["dry-whisper.example.com"]},
-                "qwen":    {"uris": ["dry-qwen.example.com"]},
-            }}}]}
+            return {"leases": [{"status": {"services": {"whisper": {"uris": ["dry-whisper.example.com"]}, "qwen": {"uris": ["dry-qwen.example.com"]}}}}]}
 
-        if not self.client:
+        if not await self._ensure_initialized():
             return None
 
+        # Get provider for this dseq
+        cmd = [
+            "akash", "query", "market", "lease", "list",
+            "--owner", self.wallet_address,
+            "--dseq", str(dseq),
+            "--node", self.node,
+            "-o", "json"
+        ]
+        rc, out, err = await self._run_cmd(cmd)
+        if rc != 0:
+            logger.warning(f"fetch leases failed: {err}")
+            return None
+            
         try:
-            # Fetch leases for the deployment
-            leases = await asyncio.to_thread(self.client.fetch_leases, dseq)
+            data = json.loads(out)
+            leases = data.get("leases", [])
             if not leases:
                 return None
-            
             lease = leases[0]
-            # Extract lease identifiers safely
-            gseq = getattr(lease, 'gseq', 1)
-            oseq = getattr(lease, 'oseq', 1)
-            provider = getattr(lease, 'provider', '')
-            
-            # Fetch lease status from provider
-            status = await asyncio.to_thread(self.client.fetch_lease_status, dseq, gseq, oseq, provider)
-            
-            services_dict = {}
-            if hasattr(status, 'services'):
-                for svc_name, svc_obj in status.services.items():
-                    uris = getattr(svc_obj, 'uris', [])
-                    services_dict[svc_name] = {"uris": uris}
-            elif isinstance(status, dict):
-                for svc_name, svc_obj in status.get('services', {}).items():
-                    uris = svc_obj.get('uris', []) if isinstance(svc_obj, dict) else getattr(svc_obj, 'uris', [])
-                    services_dict[svc_name] = {"uris": uris}
-
-            return {"leases": [{"status": {"services": services_dict}}]}
+            lease_id = lease.get("lease", {}).get("lease_id", {})
+            provider = lease_id.get("provider", "")
         except Exception as e:
-            logger.warning(f"get_deployment(lease_status) failed: {e}")
+            logger.warning(f"Failed to parse leases: {e}")
             return None
 
-    # ---------------------------------------------------------------- close
+        # Get Lease Status
+        cmd = [
+            "provider-services", "lease-status",
+            "--dseq", str(dseq),
+            "--provider", provider,
+            "--from", self.wallet_name,
+            "--node", self.node,
+            "--home", os.path.expanduser("~/.akash"),
+            "--keyring-backend", "test",
+            "-o", "json"
+        ]
+        rc, out, err = await self._run_cmd(cmd)
+        if rc != 0:
+            logger.warning(f"lease-status failed: {err}")
+            return None
+            
+        try:
+            status = json.loads(out)
+            services_dict = {}
+            for svc_name, svc_obj in status.get("services", {}).items():
+                uris = svc_obj.get("uris", [])
+                services_dict[svc_name] = {"uris": uris}
+            return {"leases": [{"status": {"services": services_dict}}]}
+        except Exception as e:
+            logger.warning(f"Failed to parse lease status: {e}")
+            return None
+
     async def close_deployment(self, dseq: str) -> bool:
-        """Full stop - closes deployment on chain."""
         if not dseq:
             return True
         if self.dry_run:
             logger.info(f"[DRY-RUN] Would close DSEQ {dseq}")
             return True
 
-        if not self.client:
-            logger.error("Akash client not initialized")
+        if not await self._ensure_initialized():
             return False
 
-        try:
-            await asyncio.to_thread(self.client.close_deployment, dseq)
-            logger.info(f"Closed DSEQ {dseq}")
-            return True
-        except Exception as e:
-            if "not found" in str(e).lower() or "404" in str(e):
-                logger.warning(f"DSEQ {dseq} not found - assuming already closed")
-                return True
-            logger.error(f"close_deployment failed: {e}")
+        cmd = [
+            "akash", "tx", "deployment", "close",
+            "--dseq", str(dseq),
+            "--from", self.wallet_name,
+            "--node", self.node,
+            "--chain-id", self.chain_id,
+            "--fees", "20000uakt",
+            "--gas", "500000",
+            "-y",
+            "--keyring-backend", "test"
+        ]
+        rc, out, err = await self._run_cmd(cmd)
+        if rc != 0:
+            logger.error(f"close_deployment failed: {err}")
             return False
+            
+        logger.info(f"Closed DSEQ {dseq}")
+        return True
 
 
-akash = AkashAPI(dry_run=DRY_RUN)
+akash = AkashCLI(dry_run=DRY_RUN)
 
 
 # ==============================================================================
-# SDL loading
+# SDL loading & URI Extraction
 # ==============================================================================
 def _load_sdl(path: str) -> Optional[str]:
     try:
@@ -455,9 +526,6 @@ def _load_sdl(path: str) -> Optional[str]:
         return None
 
 
-# ==============================================================================
-# URI extraction
-# ==============================================================================
 def _extract_service_uris(deployment: Dict[str, Any]) -> Dict[str, str]:
     out: Dict[str, str] = {}
     try:
@@ -640,7 +708,6 @@ async def control_loop():
                 ctx.last_gateway_status = status
                 ctx.last_gateway_check_at = time.time()
                 
-                # FIXED: Gateway uses "queue_size" not "queue_depth"
                 queue_depth = int(status.get("queue_size", 0) or 0)
                 if queue_depth > 0:
                     ctx.last_activity_at = time.time()
@@ -648,7 +715,6 @@ async def control_loop():
             now = time.time()
             idle_for = now - ctx.last_activity_at
 
-            # Runtime limit safety
             if ctx.state == ControllerState.RUNNING and ctx.started_at:
                 try:
                     limit_h = float(AKASH_RUNTIME_LIMIT) if AKASH_RUNTIME_LIMIT else 0
@@ -701,9 +767,10 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.4.0 starting (Local Air - direct chain)")
+    logger.info("Lordera Controller v1.5.0 starting (CLI-Driven)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
-    logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID} sdk={SDK_AVAILABLE}")
+    logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
+    logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
     logger.info("=" * 70)
 
     if not AKASH_MNEMONIC and not DRY_RUN:
@@ -742,8 +809,8 @@ async def lifespan(app: FastAPI):
 # ==============================================================================
 app = FastAPI(
     title="Lordera Controller Service",
-    description="Monitors Gateway queue and manages on-demand Akash GPU deployments via direct chain access.",
-    version="1.4.0",
+    description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
+    version="1.5.0",
     lifespan=lifespan,
 )
 
@@ -791,7 +858,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.4.0",
+        "version": "1.5.0",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",

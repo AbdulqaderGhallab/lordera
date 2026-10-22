@@ -1,5 +1,5 @@
 # ==============================================================================
-# Lordera AI — Unified Dockerfile (v3.0 - FIXED)
+# Lordera AI — Unified Dockerfile (v3.1 - FIXED)
 # ==============================================================================
 # Builds ALL FOUR service images from a single file
 #   docker build --build-arg SERVICE=whisper_service    --build-arg PORT=8001 -t abdulqaderghallab/lordera-whisper:v3    .
@@ -18,7 +18,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 1- System deps + Akash binary (هذا هو الإصلاح الأساسي للـ controller)
+# 1- System deps + Akash & Provider-Services binaries (هذا هو الإصلاح الأساسي للـ controller)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -31,21 +31,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
     && curl -sSfL https://raw.githubusercontent.com/akash-network/node/main/install.sh | sh \
+    && curl -sSfL https://raw.githubusercontent.com/akash-network/provider/main/install.sh | sh \
     && mv ./bin/akash /usr/local/bin/akash \
-    && chmod +x /usr/local/bin/akash \
+    && mv ./bin/provider-services /usr/local/bin/provider-services \
+    && chmod +x /usr/local/bin/akash /usr/local/bin/provider-services \
     && rm -rf ./bin
 
 RUN pip3 install --upgrade pip setuptools wheel
 
-# 2- Python deps (انسخ كل ملفات المتطلبات للاستفادة من cache)
+# 2- Python deps (تم دمج كل المتطلبات في ملف واحد)
 COPY requirements.txt .
-COPY requirements-controller.txt ./requirements-controller.txt
 
-# تثبيت المتطلبات المشتركة
+# تثبيت المتطلبات المشتركة (تشمل الآن مكتبات الـ AI والـ Controller)
 RUN pip3 install --retries 10 --timeout 120 --resume-retries 20 -r requirements.txt
-
-# تثبيت متطلبات الـ controller الإضافية (ecdsa, cosmospy, grpcio...)
-RUN if [ -f requirements-controller.txt ]; then pip3 install --retries 10 --timeout 120 -r requirements-controller.txt; fi
 
 # 3- Copy code (يشمل gpu.yaml)
 COPY . .
