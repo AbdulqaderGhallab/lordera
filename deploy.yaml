@@ -23,6 +23,10 @@ services:
       - "MAX_RETRIES=3"
       - "RETRY_BACKOFF=2.0"
       - "LEGACY_WAIT_TIMEOUT=600.0"
+    params:
+      storage:
+        controller-state:
+          mount: /state
     expose:
       - port: 8000
         as: 80
@@ -32,7 +36,7 @@ services:
   controller:
     image: abdulqaderghallab/lordera-controller:v3
     env:
-      - "GATEWAY_URL=http://gateway:8000"
+      - "GATEWAY_URL=http://127.0.0.1:8000" # <--- تم التعديل هنا
       - "GATEWAY_ADMIN_TOKEN=sec_adm_tok_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t"
       - "AKASH_MNEMONIC=spray more old swing service clap satoshi name apart notable soon install erode wide sniff sketch feel ride picture senior summer grunt seed dutch"
       - "AKASH_NODE=https://rpc.akashnet.net:443"
@@ -65,20 +69,12 @@ services:
 
 profiles:
   compute:
-    gateway:
+    lordera-group:
       resources:
         cpu:
-          units: 0.5
+          units: 1.0
         memory:
-          size: 1Gi
-        storage:
-          - size: 5Gi
-    controller:
-      resources:
-        cpu:
-          units: 0.5
-        memory:
-          size: 512Mi
+          size: 2Gi
         storage:
           - size: 5Gi
           - name: controller-state
@@ -86,23 +82,19 @@ profiles:
             attributes:
               persistent: true
               class: beta2
-
   placement:
     akash:
       pricing:
-        gateway:
+        lordera-group:
           denom: uact
-          amount: 10000
-        controller:
-          denom: uact
-          amount: 10000
+          amount: 20000
 
 deployment:
   gateway:
     akash:
-      profile: gateway
+      profile: lordera-group
       count: 1
   controller:
     akash:
-      profile: controller
+      profile: lordera-group
       count: 1

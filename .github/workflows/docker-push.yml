@@ -1,4 +1,4 @@
-﻿name: Build and Push Lordera Images
+﻿﻿name: Build and Push Lordera Images
 
 on:
   push:
@@ -125,7 +125,7 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ==========================================
-  # 4. Build Controller (Light)
+  # 4. Build Controller (Full image with Akash CLI)
   # ==========================================
   build-controller:
     runs-on: ubuntu-latest
@@ -145,7 +145,7 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           context: .
-          file: ./Dockerfile.light
+          file: ./Dockerfile  # <--- تم التعديل هنا: استخدام Dockerfile بدلاً من Dockerfile.light
           build-args: |
             SERVICE=controller_service
             PORT=8003
