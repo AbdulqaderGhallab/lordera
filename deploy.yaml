@@ -34,7 +34,7 @@ services:
           - global: true
 
   controller:
-    image: abdulqaderghallab/lordera-controller:v8
+    image: abdulqaderghallab/lordera-controller:v10
     env:
       - "GATEWAY_URL=http://gateway:80"
       - "GATEWAY_ADMIN_TOKEN=sec_adm_tok_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t"
@@ -46,9 +46,10 @@ services:
       - "AKASH_GAS_ADJUSTMENT=1.5"
       - "AKASH_GAS_PRICES=0.025uakt"
       - "AKASH_RUNTIME_LIMIT_HOURS=4"
-      - "AKASH_BIDS_TIMEOUT=90.0"
+      - "AKASH_BIDS_TIMEOUT=360.0"
       - "AKASH_BIDS_INTERVAL=5.0"
-      - "GPU_SDL_PATH=/app/gpu.yaml"
+      - "WHISPER_SDL_PATH=/app/whisper.yaml"
+      - "QWEN_SDL_PATH=/app/qwen.yaml"
       - "CONTROLLER_POLL_INTERVAL=30.0"
       - "CONTROLLER_IDLE_TIMEOUT=600.0"
       - "CONTROLLER_START_TIMEOUT=300.0"

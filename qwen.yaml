@@ -3,7 +3,7 @@ version: "2.0"
 
 services:
   qwen:
-    image: abdulqaderghallab/lordera-qwen:v2
+    image: abdulqaderghallab/lordera-qwen:v3
     env:
       - "QWEN_MODEL_NAME=Qwen/Qwen2.5-7B-Instruct"
       - "MODEL_DIR=/models"

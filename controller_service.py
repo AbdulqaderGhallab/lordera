@@ -1,10 +1,14 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.3 (CLI-Driven)
+Lordera AI — Controller Service v1.6.4 (Separate GPU Deployments)
 ==============================================================================
-CHANGELOG v1.6.2 -> v1.6.3:
-  • Increased AKASH_BIDS_TIMEOUT from 90s to 360s (6 minutes) to allow 
-    providers enough time to submit bids for scarce GPU resources.
+CHANGELOG v1.6.3 -> v1.6.4:
+  • Completely rewritten to manage TWO SEPARATE deployments:
+      - whisper deployment using /app/whisper.yaml
+      - qwen deployment using /app/qwen.yaml
+  • Removed all references to a combined gpu.yaml.
+  • Each deployment has its own DSEQ, lease, and URI.
+  • Waits for both URIs then pushes them to the Gateway.
 ==============================================================================
 """
 import os
@@ -54,7 +58,8 @@ AKASH_BIDS_TIMEOUT   = float(os.getenv("AKASH_BIDS_TIMEOUT", "360.0"))
 AKASH_BIDS_INTERVAL  = float(os.getenv("AKASH_BIDS_INTERVAL", "5.0"))
 AKASH_RUNTIME_LIMIT  = os.getenv("AKASH_RUNTIME_LIMIT_HOURS", "4")
 
-GPU_SDL_PATH         = os.getenv("GPU_SDL_PATH", "/app/gpu.yaml")
+WHISPER_SDL_PATH     = os.getenv("WHISPER_SDL_PATH", "/app/whisper.yaml")
+QWEN_SDL_PATH        = os.getenv("QWEN_SDL_PATH", "/app/qwen.yaml")
 
 POLL_INTERVAL        = float(os.getenv("CONTROLLER_POLL_INTERVAL", "30.0"))
 IDLE_TIMEOUT         = float(os.getenv("CONTROLLER_IDLE_TIMEOUT", "600.0"))
@@ -89,10 +94,14 @@ class ControllerContext:
     last_activity_at: float = field(default_factory=time.time)
     started_at: Optional[float] = None
     stopped_at: Optional[float] = None
-    gpu_dseq: str = ""
-    gpu_provider: str = ""
-    gpu_gseq: int = 0
-    gpu_oseq: int = 0
+    whisper_dseq: str = ""
+    whisper_provider: str = ""
+    whisper_gseq: int = 0
+    whisper_oseq: int = 0
+    qwen_dseq: str = ""
+    qwen_provider: str = ""
+    qwen_gseq: int = 0
+    qwen_oseq: int = 0
     whisper_url: str = ""
     qwen_url: str = ""
     last_error: Optional[str] = None
@@ -126,15 +135,19 @@ def _persist_state() -> None:
         Path(STATE_FILE).parent.mkdir(parents=True, exist_ok=True)
         with open(STATE_FILE, "w") as f:
             json.dump({
-                "gpu_dseq":     ctx.gpu_dseq,
-                "gpu_provider": ctx.gpu_provider,
-                "gpu_gseq":     ctx.gpu_gseq,
-                "gpu_oseq":     ctx.gpu_oseq,
-                "whisper_url":  ctx.whisper_url,
-                "qwen_url":     ctx.qwen_url,
-                "total_starts": ctx.total_starts,
-                "total_stops":  ctx.total_stops,
-                "state":        ctx.state.value,
+                "whisper_dseq":     ctx.whisper_dseq,
+                "whisper_provider": ctx.whisper_provider,
+                "whisper_gseq":     ctx.whisper_gseq,
+                "whisper_oseq":     ctx.whisper_oseq,
+                "qwen_dseq":        ctx.qwen_dseq,
+                "qwen_provider":    ctx.qwen_provider,
+                "qwen_gseq":        ctx.qwen_gseq,
+                "qwen_oseq":        ctx.qwen_oseq,
+                "whisper_url":      ctx.whisper_url,
+                "qwen_url":         ctx.qwen_url,
+                "total_starts":     ctx.total_starts,
+                "total_stops":      ctx.total_stops,
+                "state":            ctx.state.value,
             }, f, indent=2)
     except Exception as e:
         logger.warning(f"persist_state failed: {e}")
@@ -146,18 +159,19 @@ def _restore_state() -> None:
     try:
         with open(STATE_FILE) as f:
             data = json.load(f)
-        ctx.gpu_dseq     = data.get("gpu_dseq", "")
-        ctx.gpu_provider = data.get("gpu_provider", "")
-        ctx.gpu_gseq     = int(data.get("gpu_gseq", 0) or 0)
-        ctx.gpu_oseq     = int(data.get("gpu_oseq", 0) or 0)
-        ctx.whisper_url  = data.get("whisper_url", "")
-        ctx.qwen_url     = data.get("qwen_url", "")
-        ctx.total_starts = data.get("total_starts", 0)
-        ctx.total_stops  = data.get("total_stops", 0)
-        logger.info(
-            f"Restored: dseq={ctx.gpu_dseq or 'none'} "
-            f"whisper={ctx.whisper_url or 'none'} qwen={ctx.qwen_url or 'none'}"
-        )
+        ctx.whisper_dseq     = data.get("whisper_dseq", "")
+        ctx.whisper_provider = data.get("whisper_provider", "")
+        ctx.whisper_gseq     = int(data.get("whisper_gseq", 0) or 0)
+        ctx.whisper_oseq     = int(data.get("whisper_oseq", 0) or 0)
+        ctx.qwen_dseq        = data.get("qwen_dseq", "")
+        ctx.qwen_provider    = data.get("qwen_provider", "")
+        ctx.qwen_gseq        = int(data.get("qwen_gseq", 0) or 0)
+        ctx.qwen_oseq        = int(data.get("qwen_oseq", 0) or 0)
+        ctx.whisper_url      = data.get("whisper_url", "")
+        ctx.qwen_url         = data.get("qwen_url", "")
+        ctx.total_starts     = data.get("total_starts", 0)
+        ctx.total_stops      = data.get("total_stops", 0)
+        logger.info(f"Restored: whisper_dseq={ctx.whisper_dseq or 'none'} qwen_dseq={ctx.qwen_dseq or 'none'}")
     except Exception as e:
         logger.warning(f"restore_state failed: {e}")
 
@@ -199,7 +213,7 @@ async def push_downstream_urls(whisper_url: str, qwen_url: str) -> bool:
 
 
 # ==============================================================================
-# Akash CLI Client
+# Akash CLI Client (unchanged from v1.6.3, but with separate deployment handling)
 # ==============================================================================
 class AkashCLI:
     def __init__(self, dry_run: bool = False):
@@ -288,15 +302,16 @@ class AkashCLI:
         logger.info(f"Wallet {self.wallet_name} initialized: {self.wallet_address}")
         return True
 
-    async def create_deployment(self, sdl_yaml: str) -> Optional[str]:
+    async def create_deployment(self, sdl_yaml: str, label: str) -> Optional[str]:
         if self.dry_run:
-            logger.info(f"[DRY-RUN] Would create deployment")
-            return f"DRYRUN-{int(time.time())}"
+            fake = f"DRYRUN-{label}-{int(time.time())}"
+            logger.info(f"[DRY-RUN] Would create {label} deployment -> DSEQ {fake}")
+            return fake
 
         if not await self._ensure_initialized():
             return None
 
-        sdl_path = "/tmp/gpu_sdl.yaml"
+        sdl_path = f"/tmp/{label}_sdl.yaml"
         with open(sdl_path, "w") as f:
             f.write(sdl_yaml)
 
@@ -312,7 +327,7 @@ class AkashCLI:
         ]
         rc, out, err = await self._run_cmd(cmd)
         if rc != 0:
-            logger.error(f"create_deployment failed: {err}")
+            logger.error(f"create_deployment ({label}) failed: {err}")
             return None
 
         await asyncio.sleep(5)
@@ -333,7 +348,7 @@ class AkashCLI:
             data = json.loads(out)
             deployments = data.get("deployments", [])
             if not deployments:
-                logger.error("No active deployments found after creation.")
+                logger.error(f"No active deployments found after creating {label}.")
                 return None
             
             def get_dseq(dep):
@@ -343,6 +358,7 @@ class AkashCLI:
 
             deployments.sort(key=get_dseq, reverse=True)
             
+            # The newest deployment should be ours (since we just created it)
             best_dep = deployments[0].get("deployment", {})
             best_id = best_dep.get("id") or best_dep.get("deployment_id") or {}
             dseq = str(best_id.get("dseq", ""))
@@ -351,7 +367,7 @@ class AkashCLI:
                 logger.error(f"Could not extract dseq from {deployments[0]}")
                 return None
                 
-            logger.info(f"Created deployment -> DSEQ {dseq}")
+            logger.info(f"Created {label} deployment -> DSEQ {dseq}")
             return dseq
         except Exception as e:
             logger.error(f"Failed to parse deployment list: {e}")
@@ -400,7 +416,7 @@ class AkashCLI:
             logger.warning(f"Failed to parse bids: {e}")
             return []
 
-    async def create_lease(self, dseq: str, gseq: int, oseq: int, provider: str) -> bool:
+    async def create_lease(self, dseq: str, gseq: int, oseq: int, provider: str, sdl_path: str) -> bool:
         if self.dry_run:
             logger.info(f"[DRY-RUN] Would create lease dseq={dseq} provider={provider}")
             return True
@@ -428,7 +444,6 @@ class AkashCLI:
         
         logger.info(f"Lease created dseq={dseq} provider={provider}")
 
-        sdl_path = "/tmp/gpu_sdl.yaml"
         cmd = [
             "provider-services", "send-manifest", sdl_path,
             "--dseq", str(dseq),
@@ -536,7 +551,7 @@ akash = AkashCLI(dry_run=DRY_RUN)
 
 
 # ==============================================================================
-# SDL loading & URI Extraction
+# SDL loading
 # ==============================================================================
 def _load_sdl(path: str) -> Optional[str]:
     try:
@@ -550,6 +565,9 @@ def _load_sdl(path: str) -> Optional[str]:
         return None
 
 
+# ==============================================================================
+# URI extraction
+# ==============================================================================
 def _extract_service_uris(deployment: Dict[str, Any]) -> Dict[str, str]:
     out: Dict[str, str] = {}
     try:
@@ -570,41 +588,47 @@ def _extract_service_uris(deployment: Dict[str, Any]) -> Dict[str, str]:
     return out
 
 
-async def resolve_and_push_uris(dseq: str) -> bool:
+async def resolve_and_push_uris(whisper_dseq: str, qwen_dseq: str) -> bool:
     deadline = time.time() + URI_WAIT_TIMEOUT
     while time.time() < deadline:
-        dep = await akash.get_deployment(dseq)
-        if dep:
-            uris = _extract_service_uris(dep)
-            whisper_url = uris.get("whisper", "")
-            qwen_url    = uris.get("qwen", "")
+        whisper_dep = await akash.get_deployment(whisper_dseq) if whisper_dseq else None
+        qwen_dep = await akash.get_deployment(qwen_dseq) if qwen_dseq else None
 
-            if whisper_url and qwen_url:
-                ctx.whisper_url = whisper_url
-                ctx.qwen_url = qwen_url
-                _persist_state()
-                if await push_downstream_urls(whisper_url, qwen_url):
-                    return True
-                logger.warning("URIs found but push failed - will retry")
-            else:
-                logger.info(
-                    f"Waiting for URIs... whisper={whisper_url or '-'} qwen={qwen_url or '-'}"
-                )
+        whisper_uris = _extract_service_uris(whisper_dep) if whisper_dep else {}
+        qwen_uris = _extract_service_uris(qwen_dep) if qwen_dep else {}
+
+        whisper_url = whisper_uris.get("whisper", "")
+        qwen_url = qwen_uris.get("qwen", "")
+
+        if whisper_url and qwen_url:
+            ctx.whisper_url = whisper_url
+            ctx.qwen_url = qwen_url
+            _persist_state()
+            if await push_downstream_urls(whisper_url, qwen_url):
+                return True
+            logger.warning("URIs found but push failed - will retry")
+        else:
+            logger.info(f"Waiting for URIs... whisper={whisper_url or '-'} qwen={qwen_url or '-'}")
         await asyncio.sleep(URI_POLL_INTERVAL)
     logger.error(f"URIs did not appear within {URI_WAIT_TIMEOUT}s")
     return False
 
 
 # ==============================================================================
-# Wait for bids + create lease
+# Wait for bids + create lease for a single deployment
 # ==============================================================================
-async def _wait_and_lease(dseq: str) -> bool:
+async def _wait_and_lease(dseq: str, label: str, sdl_path: str) -> bool:
     if DRY_RUN:
-        ok = await akash.create_lease(dseq, 1, 1, "akash1dryprovider")
+        ok = await akash.create_lease(dseq, 1, 1, "akash1dryprovider", sdl_path)
         if ok:
-            ctx.gpu_gseq = 1
-            ctx.gpu_oseq = 1
-            ctx.gpu_provider = "akash1dryprovider"
+            if label == "whisper":
+                ctx.whisper_gseq = 1
+                ctx.whisper_oseq = 1
+                ctx.whisper_provider = "akash1dryprovider"
+            else:
+                ctx.qwen_gseq = 1
+                ctx.qwen_oseq = 1
+                ctx.qwen_provider = "akash1dryprovider"
         return ok
 
     deadline = time.time() + AKASH_BIDS_TIMEOUT
@@ -622,16 +646,21 @@ async def _wait_and_lease(dseq: str) -> bool:
                 gseq = int(bid_id.get("gseq", 1))
                 oseq = int(bid_id.get("oseq", 1))
                 prov = bid_id.get("provider", "")
-                logger.info(f"Attempting lease with provider={prov} price={_price(b)}")
-                if await akash.create_lease(dseq, gseq, oseq, prov):
-                    ctx.gpu_gseq = gseq
-                    ctx.gpu_oseq = oseq
-                    ctx.gpu_provider = prov
+                logger.info(f"Attempting lease ({label}) with provider={prov} price={_price(b)}")
+                if await akash.create_lease(dseq, gseq, oseq, prov, sdl_path):
+                    if label == "whisper":
+                        ctx.whisper_gseq = gseq
+                        ctx.whisper_oseq = oseq
+                        ctx.whisper_provider = prov
+                    else:
+                        ctx.qwen_gseq = gseq
+                        ctx.qwen_oseq = oseq
+                        ctx.qwen_provider = prov
                     return True
-            logger.warning("All bids failed - retrying")
-        logger.info(f"No bids yet (attempt {attempt})")
+            logger.warning(f"All bids failed for {label} - retrying")
+        logger.info(f"No bids yet for {label} (attempt {attempt})")
         await asyncio.sleep(AKASH_BIDS_INTERVAL)
-    logger.error(f"No bid accepted within {AKASH_BIDS_TIMEOUT}s")
+    logger.error(f"No bid accepted for {label} within {AKASH_BIDS_TIMEOUT}s")
     return False
 
 
@@ -644,33 +673,55 @@ async def action_start() -> bool:
     logger.info("=" * 60)
     logger.info("ACTION: START")
 
-    if ctx.gpu_dseq:
-        logger.info(f"GPU deployment already exists (dseq={ctx.gpu_dseq}); skipping create")
+    if ctx.whisper_dseq and ctx.qwen_dseq:
+        logger.info(f"Both GPU deployments already exist (whisper={ctx.whisper_dseq}, qwen={ctx.qwen_dseq}); skipping create")
         return True
 
-    sdl = _load_sdl(GPU_SDL_PATH)
-    if not sdl:
-        ctx.last_error = f"SDL missing: {GPU_SDL_PATH}"
+    whisper_sdl = _load_sdl(WHISPER_SDL_PATH)
+    qwen_sdl = _load_sdl(QWEN_SDL_PATH)
+
+    if not whisper_sdl:
+        ctx.last_error = f"Whisper SDL missing: {WHISPER_SDL_PATH}"
+        ctx.state = ControllerState.ERROR
+        return False
+    if not qwen_sdl:
+        ctx.last_error = f"Qwen SDL missing: {QWEN_SDL_PATH}"
         ctx.state = ControllerState.ERROR
         return False
 
-    dseq = await akash.create_deployment(sdl)
-    if not dseq:
-        ctx.last_error = "create_deployment failed"
+    # Create both deployments
+    whisper_dseq = await akash.create_deployment(whisper_sdl, "whisper")
+    if not whisper_dseq:
+        ctx.last_error = "create whisper deployment failed"
         ctx.state = ControllerState.ERROR
         return False
 
-    ctx.gpu_dseq = dseq
+    qwen_dseq = await akash.create_deployment(qwen_sdl, "qwen")
+    if not qwen_dseq:
+        ctx.last_error = "create qwen deployment failed"
+        ctx.state = ControllerState.ERROR
+        await akash.close_deployment(whisper_dseq)
+        return False
+
+    ctx.whisper_dseq = whisper_dseq
+    ctx.qwen_dseq = qwen_dseq
     _persist_state()
 
-    if not await _wait_and_lease(dseq):
-        ctx.last_error = "bids/lease failed"
+    # Wait for leases
+    whisper_lease_ok = await _wait_and_lease(whisper_dseq, "whisper", f"/tmp/whisper_sdl.yaml")
+    qwen_lease_ok = await _wait_and_lease(qwen_dseq, "qwen", f"/tmp/qwen_sdl.yaml")
+
+    if not whisper_lease_ok or not qwen_lease_ok:
+        ctx.last_error = "failed to secure lease for one or both GPU deployments"
         ctx.state = ControllerState.ERROR
-        await akash.close_deployment(dseq)
-        ctx.gpu_dseq = ""
+        await akash.close_deployment(whisper_dseq)
+        await akash.close_deployment(qwen_dseq)
+        ctx.whisper_dseq = ""
+        ctx.qwen_dseq = ""
         return False
 
-    if not await resolve_and_push_uris(dseq):
+    # Resolve URIs and push to Gateway
+    if not await resolve_and_push_uris(whisper_dseq, qwen_dseq):
         ctx.last_error = "URI resolution failed"
         ctx.state = ControllerState.ERROR
         return False
@@ -679,30 +730,34 @@ async def action_start() -> bool:
     ctx.total_starts += 1
     ctx.last_activity_at = time.time()
     _persist_state()
-    logger.info(f"START complete dseq={dseq}")
+    logger.info(f"START complete: whisper_dseq={whisper_dseq}, qwen_dseq={qwen_dseq}")
     return True
 
 
 async def action_stop() -> bool:
     ctx.state = ControllerState.STOPPING
     logger.info("=" * 60)
-    logger.info(f"ACTION: STOP dseq={ctx.gpu_dseq}")
+    logger.info(f"ACTION: STOP whisper_dseq={ctx.whisper_dseq} qwen_dseq={ctx.qwen_dseq}")
 
-    dseq = ctx.gpu_dseq
-    if not dseq:
-        ctx.state = ControllerState.IDLE
-        return True
+    ok = True
+    if ctx.whisper_dseq:
+        ok = await akash.close_deployment(ctx.whisper_dseq) and ok
+    if ctx.qwen_dseq:
+        ok = await akash.close_deployment(ctx.qwen_dseq) and ok
 
-    ok = await akash.close_deployment(dseq)
     if not ok:
-        ctx.last_error = f"close_deployment failed for {dseq}"
+        ctx.last_error = "failed to close one or both deployments"
         ctx.state = ControllerState.ERROR
         return False
 
-    ctx.gpu_dseq = ""
-    ctx.gpu_provider = ""
-    ctx.gpu_gseq = 0
-    ctx.gpu_oseq = 0
+    ctx.whisper_dseq = ""
+    ctx.whisper_provider = ""
+    ctx.whisper_gseq = 0
+    ctx.whisper_oseq = 0
+    ctx.qwen_dseq = ""
+    ctx.qwen_provider = ""
+    ctx.qwen_gseq = 0
+    ctx.qwen_oseq = 0
     ctx.whisper_url = ""
     ctx.qwen_url = ""
     ctx.stopped_at = time.time()
@@ -766,9 +821,7 @@ async def control_loop():
 
             elif ctx.state == ControllerState.ERROR:
                 logger.info(f"In ERROR state: {ctx.last_error} - will retry in {POLL_INTERVAL}s")
-                if ctx.gpu_dseq:
-                    await akash.close_deployment(ctx.gpu_dseq)
-                    ctx.gpu_dseq = ""
+                await action_stop()  # clean up any partial deployments
                 ctx.state = ControllerState.IDLE
                 ctx.consecutive_errors += 1
 
@@ -790,7 +843,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.3 starting (CLI-Driven)")
+    logger.info("Lordera Controller v1.6.4 starting (Separate GPU Deployments)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -833,7 +886,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.3",
+    version="1.6.4",
     lifespan=lifespan,
 )
 
@@ -844,8 +897,10 @@ app = FastAPI(
 class HealthResponse(BaseModel):
     status: str
     state: str
-    gpu_dseq: str
-    gpu_provider: str
+    whisper_dseq: str
+    whisper_provider: str
+    qwen_dseq: str
+    qwen_provider: str
     whisper_url: str
     qwen_url: str
     consecutive_errors: int
@@ -856,10 +911,14 @@ class HealthResponse(BaseModel):
 
 class StatusResponse(BaseModel):
     state: str
-    gpu_dseq: str
-    gpu_provider: str
-    gpu_gseq: int
-    gpu_oseq: int
+    whisper_dseq: str
+    whisper_provider: str
+    whisper_gseq: int
+    whisper_oseq: int
+    qwen_dseq: str
+    qwen_provider: str
+    qwen_gseq: int
+    qwen_oseq: int
     whisper_url: str
     qwen_url: str
     last_activity_at: float
@@ -881,7 +940,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.3",
+        "version": "1.6.4",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
@@ -897,8 +956,10 @@ async def health_check():
     return HealthResponse(
         status="healthy",
         state=ctx.state.value,
-        gpu_dseq=ctx.gpu_dseq,
-        gpu_provider=ctx.gpu_provider,
+        whisper_dseq=ctx.whisper_dseq,
+        whisper_provider=ctx.whisper_provider,
+        qwen_dseq=ctx.qwen_dseq,
+        qwen_provider=ctx.qwen_provider,
         whisper_url=ctx.whisper_url,
         qwen_url=ctx.qwen_url,
         consecutive_errors=ctx.consecutive_errors,
@@ -913,10 +974,14 @@ async def get_status():
     idle_seconds = time.time() - ctx.last_activity_at
     return StatusResponse(
         state=ctx.state.value,
-        gpu_dseq=ctx.gpu_dseq,
-        gpu_provider=ctx.gpu_provider,
-        gpu_gseq=ctx.gpu_gseq,
-        gpu_oseq=ctx.gpu_oseq,
+        whisper_dseq=ctx.whisper_dseq,
+        whisper_provider=ctx.whisper_provider,
+        whisper_gseq=ctx.whisper_gseq,
+        whisper_oseq=ctx.whisper_oseq,
+        qwen_dseq=ctx.qwen_dseq,
+        qwen_provider=ctx.qwen_provider,
+        qwen_gseq=ctx.qwen_gseq,
+        qwen_oseq=ctx.qwen_oseq,
         whisper_url=ctx.whisper_url,
         qwen_url=ctx.qwen_url,
         last_activity_at=ctx.last_activity_at,
@@ -939,7 +1004,8 @@ async def get_status():
             "runtime_limit_hours": float(AKASH_RUNTIME_LIMIT) if AKASH_RUNTIME_LIMIT else None,
             "uri_wait_timeout": URI_WAIT_TIMEOUT,
             "uri_poll_interval": URI_POLL_INTERVAL,
-            "gpu_sdl_path": GPU_SDL_PATH,
+            "whisper_sdl_path": WHISPER_SDL_PATH,
+            "qwen_sdl_path": QWEN_SDL_PATH,
             "dry_run": DRY_RUN,
         },
     )
@@ -952,7 +1018,8 @@ async def force_start():
     ok = await action_start()
     if not ok:
         raise HTTPException(status_code=502, detail=ctx.last_error or "Start failed")
-    return {"status": "started", "state": ctx.state.value, "dseq": ctx.gpu_dseq}
+    return {"status": "started", "state": ctx.state.value,
+            "whisper_dseq": ctx.whisper_dseq, "qwen_dseq": ctx.qwen_dseq}
 
 
 @app.post("/force-stop")
@@ -967,10 +1034,14 @@ async def force_stop():
 
 @app.post("/reset")
 async def reset_state():
-    ctx.gpu_dseq = ""
-    ctx.gpu_provider = ""
-    ctx.gpu_gseq = 0
-    ctx.gpu_oseq = 0
+    ctx.whisper_dseq = ""
+    ctx.whisper_provider = ""
+    ctx.whisper_gseq = 0
+    ctx.whisper_oseq = 0
+    ctx.qwen_dseq = ""
+    ctx.qwen_provider = ""
+    ctx.qwen_gseq = 0
+    ctx.qwen_oseq = 0
     ctx.whisper_url = ""
     ctx.qwen_url = ""
     ctx.state = ControllerState.IDLE

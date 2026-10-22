@@ -3,7 +3,7 @@ version: "2.0"
 
 services:
   whisper:
-    image: abdulqaderghallab/lordera-whisper:v2
+    image: abdulqaderghallab/lordera-whisper:v3
     env:
       - "WHISPER_MODEL_NAME=large-v3"
       - "MODEL_DIR=/models"
