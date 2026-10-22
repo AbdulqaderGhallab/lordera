@@ -110,7 +110,7 @@ jobs:
             PORT=8000
           push: true
           tags: |
-            abdulqaderghallab/lordera-gateway:v5
+            abdulqaderghallab/lordera-gateway:v6
             abdulqaderghallab/lordera-gateway:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max

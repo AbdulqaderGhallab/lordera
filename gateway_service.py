@@ -1,15 +1,12 @@
 """
 ==============================================================================
-Lordera AI — Gateway Service v2.3.1
+Lordera AI — Gateway Service v2.3.2
 ==============================================================================
-CHANGELOG v2.3 → v2.3.1:
-  • Added CORSMiddleware to allow the local frontend (HTML/JS) to connect.
-  • This is strictly necessary for browser-based testing.
-
-CHANGELOG v2.2 → v2.3:
-  • Added support for direct text input via POST /jobs/text.
-  • Added `job_type` and `input_text` to the Job dataclass.
-  • `process_job` now conditionally calls Whisper (if audio) and always calls Qwen.
+CHANGELOG v2.3.1 → v2.3.2:
+  • CRITICAL FIX: The worker loop now checks if the downstream services 
+    (Whisper & Qwen) are healthy BEFORE pulling a job from the queue.
+  • This ensures the queue size remains > 0, allowing the Controller to see it,
+    spin up the GPU, and only then will the Gateway process the job.
 ==============================================================================
 """
 import os
@@ -340,6 +337,30 @@ async def post_with_retry(
 
 
 # ==============================================================================
+# Downstream Health Check (CRITICAL for Controller Sync)
+# ==============================================================================
+async def check_downstream_ready() -> bool:
+    """Check if both Whisper and Qwen are up and running."""
+    # Check Whisper
+    try:
+        r = await http_client.get(f"{get_whisper_url()}/health", headers=internal_headers(), timeout=3.0)
+        if r.status_code != 200:
+            return False
+    except Exception:
+        return False
+        
+    # Check Qwen
+    try:
+        r = await http_client.get(f"{get_qwen_url()}/health", headers=internal_headers(), timeout=3.0)
+        if r.status_code != 200:
+            return False
+    except Exception:
+        return False
+        
+    return True
+
+
+# ==============================================================================
 # Worker: Sequential Job Processor
 # ==============================================================================
 async def process_job(job: Job) -> Dict[str, Any]:
@@ -411,6 +432,17 @@ async def worker_loop() -> None:
     logger.info("Worker loop started.")
     while True:
         try:
+            if job_queue.empty():
+                await asyncio.sleep(1)
+                continue
+
+            # If there is a job, wait until the GPU (downstream) is ready
+            if not await check_downstream_ready():
+                logger.info("Downstream (GPU) not ready yet. Keeping job in queue...")
+                await asyncio.sleep(5)
+                continue
+
+            # Downstream is ready, pull the job
             job: Job = await job_queue.get()
 
             await job_store.recompute_positions()
@@ -492,7 +524,7 @@ async def lifespan(app: FastAPI):
     global worker_task, cleanup_task, rate_cleanup_task
 
     logger.info("=" * 70)
-    logger.info("Lordera Gateway v2.3.1 starting...")
+    logger.info("Lordera Gateway v2.3.2 starting...")
     logger.info(f"Whisper:      {get_whisper_url()}")
     logger.info(f"Qwen:         {get_qwen_url()}")
     logger.info(f"Queue:        max={MAX_QUEUE_SIZE}, reject@{REJECT_THRESHOLD*100:.0f}%")
@@ -535,7 +567,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera AI Gateway",
     description="Async job-based orchestrator for Whisper + Qwen.",
-    version="2.3.1",
+    version="2.3.2",
     lifespan=lifespan,
 )
 
@@ -613,7 +645,7 @@ class TextJobSubmitRequest(BaseModel):
 async def root():
     return {
         "service": "Lordera AI Gateway",
-        "version": "2.3.1",
+        "version": "2.3.2",
         "endpoints": {
             "submit_audio": "POST /jobs",
             "submit_text":  "POST /jobs/text",
