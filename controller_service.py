@@ -1,10 +1,10 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.2 (CLI-Driven)
+Lordera AI — Controller Service v1.6.3 (CLI-Driven)
 ==============================================================================
-CHANGELOG v1.6.1 -> v1.6.2:
-  • Fixed parsing of the deployment list. Akash CLI returns the DSEQ under 
-    'deployment.id.dseq' instead of 'deployment.deployment_id.dseq'.
+CHANGELOG v1.6.2 -> v1.6.3:
+  • Increased AKASH_BIDS_TIMEOUT from 90s to 360s (6 minutes) to allow 
+    providers enough time to submit bids for scarce GPU resources.
 ==============================================================================
 """
 import os
@@ -50,7 +50,7 @@ AKASH_MNEMONIC       = os.getenv("AKASH_MNEMONIC", "")
 AKASH_NODE           = os.getenv("AKASH_NODE", "https://rpc.akashnet.net:443")
 AKASH_CHAIN_ID       = os.getenv("AKASH_CHAIN_ID", "akashnet-2")
 AKASH_TIMEOUT        = float(os.getenv("AKASH_TIMEOUT", "60.0"))
-AKASH_BIDS_TIMEOUT   = float(os.getenv("AKASH_BIDS_TIMEOUT", "90.0"))
+AKASH_BIDS_TIMEOUT   = float(os.getenv("AKASH_BIDS_TIMEOUT", "360.0"))
 AKASH_BIDS_INTERVAL  = float(os.getenv("AKASH_BIDS_INTERVAL", "5.0"))
 AKASH_RUNTIME_LIMIT  = os.getenv("AKASH_RUNTIME_LIMIT_HOURS", "4")
 
@@ -336,7 +336,6 @@ class AkashCLI:
                 logger.error("No active deployments found after creation.")
                 return None
             
-            # Robust parsing to handle both 'id' and 'deployment_id'
             def get_dseq(dep):
                 d = dep.get("deployment", {})
                 id_obj = d.get("id") or d.get("deployment_id") or {}
@@ -791,7 +790,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.2 starting (CLI-Driven)")
+    logger.info("Lordera Controller v1.6.3 starting (CLI-Driven)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -834,7 +833,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.2",
+    version="1.6.3",
     lifespan=lifespan,
 )
 
@@ -882,7 +881,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.2",
+        "version": "1.6.3",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
