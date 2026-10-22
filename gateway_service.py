@@ -1,27 +1,15 @@
 """
 ==============================================================================
-Lordera AI — Gateway Service v2.2
+Lordera AI — Gateway Service v2.3.1
 ==============================================================================
-CHANGELOG v2.1 → v2.2:
-  • Added INTERNAL_TOKEN support: sent as X-Internal-Token header on every
-    call to Whisper and Qwen (both /transcribe, /analyze, and /health probes).
-    Must match the INTERNAL_TOKEN configured in gpu.yaml.
-  • If INTERNAL_TOKEN is empty → header is not sent (local dev mode).
-    Whisper/Qwen will also have empty tokens → protection disabled.
+CHANGELOG v2.3 → v2.3.1:
+  • Added CORSMiddleware to allow the local frontend (HTML/JS) to connect.
+  • This is strictly necessary for browser-based testing.
 
-CHANGELOG v2.0 → v2.1:
-  • Dynamic downstream URLs: whisper/qwen URLs are now mutable at runtime.
-  • New endpoint POST /admin/downstream (protected by GATEWAY_ADMIN_TOKEN)
-    → called by Controller after each successful Akash lease.
-  • All internal uses replaced with get_whisper_url() / get_qwen_url().
-
-Architecture: Async Job Pattern + Rate Limiting + Circuit Breaker + Metrics
-Design goals:
-  - NEVER hang the UI    →  POST /jobs returns in ~50ms, client polls /jobs/{id}
-  - NEVER crash          →  Backpressure + Rate Limit + Circuit Breaker
-  - Slow is OK, fail is not → Queue positions + ETA instead of hard timeouts
-  - Max users on current resources → in-memory job store with TTL cleanup
-  - Zero-trust internals → INTERNAL_TOKEN on every downstream call
+CHANGELOG v2.2 → v2.3:
+  • Added support for direct text input via POST /jobs/text.
+  • Added `job_type` and `input_text` to the Job dataclass.
+  • `process_job` now conditionally calls Whisper (if audio) and always calls Qwen.
 ==============================================================================
 """
 import os
@@ -37,6 +25,7 @@ from enum import Enum
 
 import httpx
 from fastapi import FastAPI, File, UploadFile, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
@@ -54,14 +43,9 @@ logger = logging.getLogger("gateway")
 # ==============================================================================
 # Configuration
 # ==============================================================================
-# Admin token — must match the Controller's GATEWAY_ADMIN_TOKEN
 ADMIN_TOKEN = os.getenv("GATEWAY_ADMIN_TOKEN", "")
-
-# Internal token — must match Whisper's and Qwen's INTERNAL_TOKEN
-# Sent on every downstream request (transcribe / analyze / health).
 INTERNAL_TOKEN = os.getenv("INTERNAL_TOKEN", "")
 
-# Mutable downstream URLs (updated at runtime by Controller via /admin/downstream)
 _downstream: Dict[str, str] = {
     "whisper": os.getenv("WHISPER_SERVICE_URL", "http://localhost:8001"),
     "qwen":    os.getenv("QWEN_SERVICE_URL",    "http://localhost:8002"),
@@ -86,6 +70,7 @@ RATE_LIMIT_MAX    = int(os.getenv("RATE_LIMIT_MAX", "10"))
 MAX_UPLOAD_SIZE   = int(os.getenv("MAX_UPLOAD_SIZE", str(50 * 1024 * 1024)))
 
 LEGACY_WAIT_TIMEOUT = float(os.getenv("LEGACY_WAIT_TIMEOUT", "600.0"))
+MAX_TEXT_LENGTH     = int(os.getenv("MAX_TEXT_LENGTH", "10000"))
 
 
 def get_whisper_url() -> str:
@@ -95,10 +80,6 @@ def get_qwen_url() -> str:
     return _downstream["qwen"]
 
 def internal_headers() -> Dict[str, str]:
-    """
-    Headers to send on every downstream call (Whisper / Qwen).
-    Adds X-Internal-Token only if INTERNAL_TOKEN is configured.
-    """
     if INTERNAL_TOKEN:
         return {"X-Internal-Token": INTERNAL_TOKEN}
     return {}
@@ -122,6 +103,8 @@ class Job:
     filename: str
     content_type: str
     file_content: bytes
+    job_type: str = "audio"  # "audio" or "text"
+    input_text: Optional[str] = None
     state: JobState = JobState.QUEUED
     position: int = 0
     created_at: float = field(default_factory=time.time)
@@ -190,10 +173,7 @@ class JobStore:
                     for jid in stale:
                         self._jobs.pop(jid, None)
                     if stale:
-                        logger.info(
-                            f"JobStore: cleaned {len(stale)} stale jobs. "
-                            f"Total now: {len(self._jobs)}"
-                        )
+                        logger.info(f"JobStore: cleaned {len(stale)} stale jobs. Total now: {len(self._jobs)}")
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -270,9 +250,7 @@ class CircuitBreaker:
             self.failures += 1
             if self.failures >= self.threshold and self.opened_at is None:
                 self.opened_at = time.time()
-                logger.warning(
-                    f"CircuitBreaker[{self.name}]: OPENED after {self.failures} failures"
-                )
+                logger.warning(f"CircuitBreaker[{self.name}]: OPENED after {self.failures} failures")
 
     def is_open(self) -> bool:
         return self.opened_at is not None
@@ -328,7 +306,7 @@ async def post_with_retry(
                 url,
                 files=files,
                 json=json_body,
-                headers=internal_headers(),     # ← X-Internal-Token added here
+                headers=internal_headers(),
                 timeout=timeout,
             )
             response.raise_for_status()
@@ -369,31 +347,40 @@ async def process_job(job: Job) -> Dict[str, Any]:
     t_start = time.time()
 
     await job_store.update(request_id, state=JobState.PROCESSING, started_at=t_start)
-    logger.info(f"[{request_id}] Processing started. Queue left: {job_queue.qsize()}")
+    logger.info(f"[{request_id}] Processing started ({job.job_type}). Queue left: {job_queue.qsize()}")
 
-    # ---- Step 1: Whisper ----
-    try:
-        files = {"file": (job.filename, job.file_content, job.content_type)}
-        whisper_resp = await post_with_retry(
-            f"{get_whisper_url()}/transcribe",
-            files=files,
-            timeout=WHISPER_TIMEOUT,
-            request_id=request_id,
-            breaker=whisper_cb,
-        )
-        wdata = whisper_resp.json()
-        transcript = (wdata.get("transcript") or "").strip()
+    transcript = ""
+
+    # ---- Step 1: Transcription (Only if Audio) ----
+    if job.job_type == "audio":
+        try:
+            files = {"file": (job.filename, job.file_content, job.content_type)}
+            whisper_resp = await post_with_retry(
+                f"{get_whisper_url()}/transcribe",
+                files=files,
+                timeout=WHISPER_TIMEOUT,
+                request_id=request_id,
+                breaker=whisper_cb,
+            )
+            wdata = whisper_resp.json()
+            transcript = (wdata.get("transcript") or "").strip()
+            if not transcript:
+                raise HTTPException(status_code=502, detail="Whisper returned empty transcript")
+            logger.info(f"[{request_id}] Transcription OK ({len(transcript)} chars)")
+        except HTTPException:
+            raise
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=502, detail=f"Whisper error: {e.response.text[:200]}")
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Whisper unreachable: {type(e).__name__}")
+    
+    elif job.job_type == "text":
+        transcript = (job.input_text or "").strip()
         if not transcript:
-            raise HTTPException(status_code=502, detail="Whisper returned empty transcript")
-        logger.info(f"[{request_id}] Transcription OK ({len(transcript)} chars)")
-    except HTTPException:
-        raise
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=502, detail=f"Whisper error: {e.response.text[:200]}")
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Whisper unreachable: {type(e).__name__}")
+            raise HTTPException(status_code=400, detail="Input text is empty")
+        logger.info(f"[{request_id}] Text input OK ({len(transcript)} chars)")
 
-    # ---- Step 2: Qwen ----
+    # ---- Step 2: Qwen Analysis (Always) ----
     try:
         qwen_resp = await post_with_retry(
             f"{get_qwen_url()}/analyze",
@@ -505,7 +492,7 @@ async def lifespan(app: FastAPI):
     global worker_task, cleanup_task, rate_cleanup_task
 
     logger.info("=" * 70)
-    logger.info("Lordera Gateway v2.2 starting...")
+    logger.info("Lordera Gateway v2.3.1 starting...")
     logger.info(f"Whisper:      {get_whisper_url()}")
     logger.info(f"Qwen:         {get_qwen_url()}")
     logger.info(f"Queue:        max={MAX_QUEUE_SIZE}, reject@{REJECT_THRESHOLD*100:.0f}%")
@@ -548,9 +535,19 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera AI Gateway",
     description="Async job-based orchestrator for Whisper + Qwen.",
-    version="2.2.0",
+    version="2.3.1",
     lifespan=lifespan,
 )
+
+# --- CORS MIDDLEWARE (Required for Frontend connection) ---
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for testing
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# ---------------------------------------------------------
 
 
 # ==============================================================================
@@ -605,6 +602,10 @@ class DownstreamUpdateResponse(BaseModel):
     qwen_url: str
 
 
+class TextJobSubmitRequest(BaseModel):
+    text: str
+
+
 # ==============================================================================
 # Endpoints
 # ==============================================================================
@@ -612,16 +613,17 @@ class DownstreamUpdateResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera AI Gateway",
-        "version": "2.2.0",
+        "version": "2.3.1",
         "endpoints": {
-            "submit":     "POST /jobs",
-            "poll":       "GET  /jobs/{job_id}",
-            "cancel":     "DELETE /jobs/{job_id}",
-            "health":     "GET  /health",
-            "queue":      "GET  /queue-status",
-            "metrics":    "GET  /metrics",
-            "legacy":     "POST /process-audio",
-            "admin":      "POST /admin/downstream",
+            "submit_audio": "POST /jobs",
+            "submit_text":  "POST /jobs/text",
+            "poll":         "GET  /jobs/{job_id}",
+            "cancel":       "DELETE /jobs/{job_id}",
+            "health":       "GET  /health",
+            "queue":        "GET  /queue-status",
+            "metrics":      "GET  /metrics",
+            "legacy":       "POST /process-audio",
+            "admin":        "POST /admin/downstream",
         },
     }
 
@@ -632,21 +634,13 @@ async def health_check():
     qwen_status = "unknown"
 
     try:
-        r = await http_client.get(
-            f"{get_whisper_url()}/health",
-            headers=internal_headers(),     # ← token also sent on health probe
-            timeout=HEALTH_TIMEOUT,
-        )
+        r = await http_client.get(f"{get_whisper_url()}/health", headers=internal_headers(), timeout=HEALTH_TIMEOUT)
         whisper_status = "healthy" if r.status_code == 200 else f"unhealthy({r.status_code})"
     except Exception as e:
         whisper_status = f"unreachable({type(e).__name__})"
 
     try:
-        r = await http_client.get(
-            f"{get_qwen_url()}/health",
-            headers=internal_headers(),
-            timeout=HEALTH_TIMEOUT,
-        )
+        r = await http_client.get(f"{get_qwen_url()}/health", headers=internal_headers(), timeout=HEALTH_TIMEOUT)
         qwen_status = "healthy" if r.status_code == 200 else f"unhealthy({r.status_code})"
     except Exception as e:
         qwen_status = f"unreachable({type(e).__name__})"
@@ -713,13 +707,9 @@ async def get_metrics():
     }
 
 
-# --------------- Async Job Submission (RECOMMENDED) -----------------
+# --------------- Async Audio Job Submission -----------------
 @app.post("/jobs", response_model=JobSubmitResponse, status_code=202)
-async def submit_job(request: Request, file: UploadFile = File(...)):
-    """
-    Submit an audio file for processing.
-    Returns IMMEDIATELY with a job_id — the client polls GET /jobs/{id}.
-    """
+async def submit_audio_job(request: Request, file: UploadFile = File(...)):
     client_ip = get_client_ip(request)
 
     # ---- Rate limit ----
@@ -731,21 +721,13 @@ async def submit_job(request: Request, file: UploadFile = File(...)):
             headers={"Retry-After": str(int(RATE_LIMIT_WINDOW))},
         )
 
-    # ---- Backpressure (early reject at 90%) ----
+    # ---- Backpressure ----
     if job_queue.qsize() >= int(MAX_QUEUE_SIZE * REJECT_THRESHOLD):
         metrics["total_rejected"] += 1
-        raise HTTPException(
-            status_code=503,
-            detail="Server busy. Please retry shortly.",
-            headers={"Retry-After": "30"},
-        )
+        raise HTTPException(status_code=503, detail="Server busy. Please retry shortly.", headers={"Retry-After": "30"})
     if job_queue.full():
         metrics["total_rejected"] += 1
-        raise HTTPException(
-            status_code=503,
-            detail="Server busy (queue full).",
-            headers={"Retry-After": "60"},
-        )
+        raise HTTPException(status_code=503, detail="Server busy (queue full).", headers={"Retry-After": "60"})
 
     # ---- Validate ----
     if not file.content_type or not file.content_type.startswith("audio/"):
@@ -755,10 +737,7 @@ async def submit_job(request: Request, file: UploadFile = File(...)):
     if not content:
         raise HTTPException(status_code=400, detail="Empty file")
     if len(content) > MAX_UPLOAD_SIZE:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large (max {MAX_UPLOAD_SIZE // (1024*1024)} MB)",
-        )
+        raise HTTPException(status_code=413, detail=f"File too large (max {MAX_UPLOAD_SIZE // (1024*1024)} MB)")
 
     # ---- Create job ----
     job_id = uuid.uuid4().hex[:12]
@@ -768,6 +747,7 @@ async def submit_job(request: Request, file: UploadFile = File(...)):
         filename=file.filename or "audio",
         content_type=file.content_type,
         file_content=content,
+        job_type="audio",
         position=job_queue.qsize() + 1,
     )
     await job_store.add(job)
@@ -778,18 +758,73 @@ async def submit_job(request: Request, file: UploadFile = File(...)):
     except asyncio.QueueFull:
         metrics["total_rejected"] += 1
         await job_store.update(job_id, state=JobState.FAILED, error="queue full")
-        raise HTTPException(
-            status_code=503,
-            detail="Server busy.",
-            headers={"Retry-After": "30"},
-        )
+        raise HTTPException(status_code=503, detail="Server busy.", headers={"Retry-After": "30"})
 
     await job_store.recompute_positions()
+    logger.info(f"[{job_id}] Audio submitted by {client_ip}. Queue: {job_queue.qsize()}/{MAX_QUEUE_SIZE}")
 
-    logger.info(
-        f"[{job_id}] Submitted by {client_ip}. "
-        f"Queue: {job_queue.qsize()}/{MAX_QUEUE_SIZE}"
+    return JobSubmitResponse(
+        job_id=job_id,
+        status="queued",
+        position=job.position,
+        estimated_wait_seconds=round(estimate_wait_seconds(), 1),
+        poll_url=f"/jobs/{job_id}",
     )
+
+
+# --------------- Async Text Job Submission -----------------
+@app.post("/jobs/text", response_model=JobSubmitResponse, status_code=202)
+async def submit_text_job(request: Request, body: TextJobSubmitRequest):
+    client_ip = get_client_ip(request)
+
+    # ---- Rate limit ----
+    if not await rate_limiter.check(client_ip):
+        metrics["total_rejected"] += 1
+        raise HTTPException(
+            status_code=429,
+            detail=f"Rate limit exceeded ({RATE_LIMIT_MAX}/{int(RATE_LIMIT_WINDOW)}s). Slow down.",
+            headers={"Retry-After": str(int(RATE_LIMIT_WINDOW))},
+        )
+
+    # ---- Backpressure ----
+    if job_queue.qsize() >= int(MAX_QUEUE_SIZE * REJECT_THRESHOLD):
+        metrics["total_rejected"] += 1
+        raise HTTPException(status_code=503, detail="Server busy. Please retry shortly.", headers={"Retry-After": "30"})
+    if job_queue.full():
+        metrics["total_rejected"] += 1
+        raise HTTPException(status_code=503, detail="Server busy (queue full).", headers={"Retry-After": "60"})
+
+    # ---- Validate ----
+    text = (body.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="Text cannot be empty")
+    if len(text) > MAX_TEXT_LENGTH:
+        raise HTTPException(status_code=413, detail=f"Text too long (max {MAX_TEXT_LENGTH} chars)")
+
+    # ---- Create job ----
+    job_id = uuid.uuid4().hex[:12]
+    job = Job(
+        id=job_id,
+        client_ip=client_ip,
+        filename="text_input.txt",
+        content_type="text/plain",
+        file_content=b"",
+        job_type="text",
+        input_text=text,
+        position=job_queue.qsize() + 1,
+    )
+    await job_store.add(job)
+    metrics["total_submitted"] += 1
+
+    try:
+        job_queue.put_nowait(job)
+    except asyncio.QueueFull:
+        metrics["total_rejected"] += 1
+        await job_store.update(job_id, state=JobState.FAILED, error="queue full")
+        raise HTTPException(status_code=503, detail="Server busy.", headers={"Retry-After": "30"})
+
+    await job_store.recompute_positions()
+    logger.info(f"[{job_id}] Text submitted by {client_ip}. Queue: {job_queue.qsize()}/{MAX_QUEUE_SIZE}")
 
     return JobSubmitResponse(
         job_id=job_id,
@@ -827,7 +862,6 @@ async def get_job(job_id: str):
 
 @app.delete("/jobs/{job_id}")
 async def cancel_job(job_id: str):
-    """Cancel a queued job. Cannot cancel a job already processing."""
     job = await job_store.get(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -846,16 +880,8 @@ async def cancel_job(job_id: str):
 # --------------- Admin: Dynamic Downstream Update -----------------
 @app.post("/admin/downstream", response_model=DownstreamUpdateResponse)
 async def update_downstream(req: DownstreamUpdateRequest):
-    """
-    Dynamically update Whisper/Qwen URLs at runtime.
-    Called by the Controller after each successful Akash lease.
-    Protected by GATEWAY_ADMIN_TOKEN.
-    """
     if not ADMIN_TOKEN:
-        raise HTTPException(
-            status_code=503,
-            detail="Admin token not configured on this Gateway",
-        )
+        raise HTTPException(status_code=503, detail="Admin token not configured on this Gateway")
     if req.token != ADMIN_TOKEN:
         logger.warning("Rejected admin/downstream with invalid token")
         raise HTTPException(status_code=403, detail="Invalid admin token")
@@ -883,19 +909,13 @@ async def update_downstream(req: DownstreamUpdateRequest):
 # --------------- Legacy Blocking Endpoint (compat only) ---------------
 @app.post("/process-audio")
 async def process_audio_legacy(request: Request, file: UploadFile = File(...)):
-    """
-    LEGACY blocking endpoint. Kept for backward compatibility.
-    New clients should use POST /jobs + GET /jobs/{id}.
-    """
     client_ip = get_client_ip(request)
 
     if not await rate_limiter.check(client_ip):
         raise HTTPException(status_code=429, detail="Rate limit exceeded")
 
     if job_queue.full():
-        raise HTTPException(
-            status_code=503, detail="Server busy", headers={"Retry-After": "60"}
-        )
+        raise HTTPException(status_code=503, detail="Server busy", headers={"Retry-After": "60"})
 
     if not file.content_type or not file.content_type.startswith("audio/"):
         raise HTTPException(status_code=400, detail="File must be audio/*")
@@ -914,6 +934,7 @@ async def process_audio_legacy(request: Request, file: UploadFile = File(...)):
         filename=file.filename or "audio",
         content_type=file.content_type,
         file_content=content,
+        job_type="audio",
         position=job_queue.qsize() + 1,
         future=future,
     )
@@ -925,10 +946,7 @@ async def process_audio_legacy(request: Request, file: UploadFile = File(...)):
         result = await asyncio.wait_for(future, timeout=LEGACY_WAIT_TIMEOUT)
     except asyncio.TimeoutError:
         future.cancel()
-        raise HTTPException(
-            status_code=504,
-            detail=f"Timeout after {LEGACY_WAIT_TIMEOUT}s. Use /jobs for async pattern.",
-        )
+        raise HTTPException(status_code=504, detail=f"Timeout after {LEGACY_WAIT_TIMEOUT}s. Use /jobs for async pattern.")
     except HTTPException:
         raise
     except Exception as e:

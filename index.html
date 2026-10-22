@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lordera AI - واجهة الاختبار</title>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card-bg: #1e293b;
+            --text: #f8fafc;
+            --text-muted: #94a3b8;
+            --primary: #3b82f6;
+            --primary-hover: #2563eb;
+            --success: #10b981;
+            --danger: #ef4444;
+            --border: #334155;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body {
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            background-color: var(--card-bg);
+            border-radius: 16px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
+            width: 100%;
+            max-width: 700px;
+            padding: 30px;
+            border: 1px solid var(--border);
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 25px;
+        }
+
+        .header h1 {
+            font-size: 24px;
+            margin-bottom: 8px;
+            background: linear-gradient(to right, #60a5fa, #a78bfa);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .header p {
+            color: var(--text-muted);
+            font-size: 14px;
+        }
+
+        /* Tabs */
+        .tabs {
+            display: flex;
+            background-color: var(--bg);
+            border-radius: 8px;
+            padding: 4px;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            flex: 1;
+            text-align: center;
+            padding: 10px;
+            cursor: pointer;
+            border-radius: 6px;
+            color: var(--text-muted);
+            font-weight: bold;
+            transition: all 0.3s ease;
+        }
+
+        .tab.active {
+            background-color: var(--primary);
+            color: white;
+            box-shadow: 0 2px 10px rgba(59, 130, 246, 0.3);
+        }
+
+        /* Content */
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(5px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .input-group {
+            margin-bottom: 20px;
+        }
+
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+            color: var(--text-muted);
+        }
+
+        textarea {
+            width: 100%;
+            height: 120px;
+            background-color: var(--bg);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            color: var(--text);
+            resize: none;
+            font-size: 14px;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        .file-drop {
+            border: 2px dashed var(--border);
+            border-radius: 8px;
+            padding: 30px;
+            text-align: center;
+            cursor: pointer;
+            transition: border-color 0.3s ease;
+            background-color: var(--bg);
+        }
+
+        .file-drop:hover {
+            border-color: var(--primary);
+        }
+
+        .file-drop input {
+            display: none;
+        }
+
+        .file-name {
+            margin-top: 10px;
+            font-size: 14px;
+            color: var(--success);
+        }
+
+        /* Buttons */
+        .btn {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+            color: white;
+        }
+
+        .btn-primary {
+            background-color: var(--primary);
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            background-color: var(--primary-hover);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn-download {
+            background-color: var(--success);
+            margin-top: 15px;
+            display: none;
+        }
+
+        /* Status & Results */
+        .status-box {
+            display: none;
+            margin-top: 25px;
+            padding: 15px;
+            border-radius: 8px;
+            background-color: var(--bg);
+            border: 1px solid var(--border);
+            text-align: center;
+        }
+
+        .status-box p {
+            margin-bottom: 5px;
+            font-size: 14px;
+        }
+
+        .status-box .highlight {
+            color: var(--primary);
+            font-weight: bold;
+        }
+
+        .spinner {
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            border-left-color: var(--primary);
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .result-box {
+            display: none;
+            margin-top: 20px;
+        }
+
+        pre {
+            background-color: #0b1120;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            color: #a5b4fc;
+            font-size: 13px;
+            line-height: 1.5;
+            border: 1px solid var(--border);
+        }
+        
+        .error-text {
+            color: var(--danger);
+            font-weight: bold;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <div class="header">
+            <h1>Lordera AI</h1>
+            <p>واجهة اختبار النظام (Whisper + Qwen)</p>
+        </div>
+
+        <!-- Tabs -->
+        <div class="tabs">
+            <div class="tab active" onclick="switchTab('audio')">🎵 إرسال صوت</div>
+            <div class="tab" onclick="switchTab('text')">📝 إرسال نص</div>
+        </div>
+
+        <!-- Audio Tab -->
+        <div id="tab-audio" class="tab-content active">
+            <div class="input-group">
+                <label>اختر ملفاً صوتياً (mp3, wav, m4a...)</label>
+                <div class="file-drop" onclick="document.getElementById('audioFile').click()">
+                    <input type="file" id="audioFile" accept="audio/*" onchange="updateFileName(this)">
+                    <div>اضغط هنا لاختيار ملف</div>
+                    <div id="fileName" class="file-name"></div>
+                </div>
+            </div>
+            <button id="btnAudio" class="btn btn-primary" onclick="submitAudio()">بدء المعالجة (صوت + تحليل)</button>
+        </div>
+
+        <!-- Text Tab -->
+        <div id="tab-text" class="tab-content">
+            <div class="input-group">
+                <label>أدخل النص المراد تحليله</label>
+                <textarea id="textInput" placeholder="اكتب النص هنا..."></textarea>
+            </div>
+            <button id="btnText" class="btn btn-primary" onclick="submitText()">بدء المعالجة (تحليل فقط)</button>
+        </div>
+
+        <!-- Status Box -->
+        <div id="statusBox" class="status-box">
+            <div class="spinner" id="spinner"></div>
+            <p id="statusText">جاري الاتصال بالبوابة...</p>
+            <p id="queueText"></p>
+        </div>
+
+        <!-- Result Box -->
+        <div id="resultBox" class="result-box">
+            <pre id="jsonResult"></pre>
+            <button id="btnDownload" class="btn btn-download" onclick="downloadJSON()">⬇️ تحميل النتيجة (JSON)</button>
+        </div>
+    </div>
+
+    <script>
+        // ⚠️ ضع رابط البوابة (Gateway) الخاص بك هنا
+        const GATEWAY_URL = "http://q5lnm9uff1e43d9k4bfa0nfh9o.ingress.akash.rhite.co.uk";
+        
+        let currentJobId = null;
+        let currentResult = null;
+        let pollInterval = null;
+
+        function switchTab(tab) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            
+            if (tab === 'audio') {
+                document.querySelectorAll('.tab')[0].classList.add('active');
+                document.getElementById('tab-audio').classList.add('active');
+            } else {
+                document.querySelectorAll('.tab')[1].classList.add('active');
+                document.getElementById('tab-text').classList.add('active');
+            }
+            resetUI();
+        }
+
+        function updateFileName(input) {
+            const fileNameDiv = document.getElementById('fileName');
+            if (input.files && input.files.length > 0) {
+                fileNameDiv.textContent = `تم اختيار: ${input.files[0].name}`;
+            }
+        }
+
+        function resetUI() {
+            document.getElementById('statusBox').style.display = 'none';
+            document.getElementById('resultBox').style.display = 'none';
+            document.getElementById('btnDownload').style.display = 'none';
+            document.getElementById('btnAudio').disabled = false;
+            document.getElementById('btnText').disabled = false;
+            if (pollInterval) clearInterval(pollInterval);
+            currentResult = null;
+        }
+
+        function showStatus(msg, queueMsg = "") {
+            document.getElementById('statusBox').style.display = 'block';
+            document.getElementById('statusText').textContent = msg;
+            document.getElementById('queueText').textContent = queueMsg;
+        }
+
+        async function submitAudio() {
+            const fileInput = document.getElementById('audioFile');
+            if (!fileInput.files || fileInput.files.length === 0) {
+                alert("الرجاء اختيار ملف صوتي أولاً");
+                return;
+            }
+
+            resetUI();
+            document.getElementById('btnAudio').disabled = true;
+            showStatus("جاري رفع الملف الصوتي...");
+
+            const formData = new FormData();
+            formData.append("file", fileInput.files[0]);
+
+            try {
+                const response = await fetch(`${GATEWAY_URL}/jobs`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+                
+                if (!response.ok) throw new Error(data.detail || "فشل في إرسال الطلب");
+
+                startPolling(data.job_id, data.position, data.estimated_wait_seconds);
+
+            } catch (error) {
+                showError(error.message);
+            }
+        }
+
+        async function submitText() {
+            const text = document.getElementById('textInput').value.trim();
+            if (!text) {
+                alert("الرجاء إدخال نص أولاً");
+                return;
+            }
+
+            resetUI();
+            document.getElementById('btnText').disabled = true;
+            showStatus("جاري إرسال النص...");
+
+            try {
+                const response = await fetch(`${GATEWAY_URL}/jobs/text`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text })
+                });
+
+                const data = await response.json();
+                
+                if (!response.ok) throw new Error(data.detail || "فشل في إرسال الطلب");
+
+                startPolling(data.job_id, data.position, data.estimated_wait_seconds);
+
+            } catch (error) {
+                showError(error.message);
+            }
+        }
+
+        function startPolling(jobId, position, waitTime) {
+            currentJobId = jobId;
+            showStatus("تم استلام الطلب. جاري المعالجة...", `موقعك في الطابور: ${position} | الوقت المتوقع: ${Math.round(waitTime)} ثانية`);
+
+            pollInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`${GATEWAY_URL}/jobs/${jobId}`);
+                    const data = await response.json();
+
+                    if (data.status === 'completed') {
+                        clearInterval(pollInterval);
+                        showResult(data);
+                    } else if (data.status === 'failed') {
+                        clearInterval(pollInterval);
+                        showError(data.error || "فشلت المعالجة في الخدمات الخلفية");
+                    } else {
+                        const qPos = data.position > 0 ? `موقعك في الطابور: ${data.position}` : "قيد المعالجة حالياً...";
+                        showStatus(`الحالة: ${data.status === 'queued' ? 'في الانتظار' : 'جاري المعالجة'}`, qPos);
+                    }
+                } catch (error) {
+                    clearInterval(pollInterval);
+                    showError("فقدان الاتصال بالبوابة");
+                }
+            }, 3000); // فحص كل 3 ثواني
+        }
+
+        function showResult(data) {
+            document.getElementById('spinner').style.display = 'none';
+            showStatus("✅ اكتملت المعالجة بنجاح");
+            document.getElementById('btnAudio').disabled = false;
+            document.getElementById('btnText').disabled = false;
+
+            // تجهيز النتيجة
+            currentResult = {
+                job_id: data.job_id,
+                transcript: data.transcript,
+                analysis: data.analysis,
+                processed_at: new Date().toISOString()
+            };
+
+            // عرض النتيجة في الشاشة
+            document.getElementById('resultBox').style.display = 'block';
+            document.getElementById('jsonResult').textContent = JSON.stringify(currentResult, null, 4);
+            document.getElementById('btnDownload').style.display = 'block';
+        }
+
+        function showError(msg) {
+            document.getElementById('spinner').style.display = 'none';
+            showStatus(`❌ خطأ: ${msg}`);
+            document.getElementById('btnAudio').disabled = false;
+            document.getElementById('btnText').disabled = false;
+        }
+
+        function downloadJSON() {
+            if (!currentResult) return;
+            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentResult, null, 4));
+            const downloadAnchorNode = document.createElement('a');
+            downloadAnchorNode.setAttribute("href", dataStr);
+            downloadAnchorNode.setAttribute("download", `lordera_result_${currentJobId}.json`);
+            document.body.appendChild(downloadAnchorNode);
+            downloadAnchorNode.click();
+            downloadAnchorNode.remove();
+        }
+    </script>
+</body>
+</html>
