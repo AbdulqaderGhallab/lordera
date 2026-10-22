@@ -1,5 +1,5 @@
 # ==============================================================================
-# Lordera AI — Unified Dockerfile (v3.1 - FIXED)
+# Lordera AI — Unified Dockerfile (v3.2 - FIXED)
 # ==============================================================================
 # Builds ALL FOUR service images from a single file
 #   docker build --build-arg SERVICE=whisper_service    --build-arg PORT=8001 -t abdulqaderghallab/lordera-whisper:v3    .
@@ -10,6 +10,9 @@
 
 FROM nvidia/cuda:12.1.1-cudnn8-runtime-ubuntu22.04
 
+# استخدام bash بدلاً من sh لضمان توافق سكربتات التثبيت
+SHELL ["/bin/bash", "-c"]
+
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -18,7 +21,7 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 1- System deps + Akash & Provider-Services binaries (هذا هو الإصلاح الأساسي للـ controller)
+# 1- تثبيت الحزم الأساسية أولاً (بما فيها curl و ca-certificates)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -29,9 +32,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     curl \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -sSfL https://raw.githubusercontent.com/akash-network/node/main/install.sh | sh \
-    && curl -sSfL https://raw.githubusercontent.com/akash-network/provider/main/install.sh | sh \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# 2- تحميل وتثبيت Akash & Provider-Services (بعد التأكد من وجود curl)
+RUN curl -sSfL https://raw.githubusercontent.com/akash-network/node/main/install.sh | bash \
+    && curl -sSfL https://raw.githubusercontent.com/akash-network/provider/main/install.sh | bash \
     && mv ./bin/akash /usr/local/bin/akash \
     && mv ./bin/provider-services /usr/local/bin/provider-services \
     && chmod +x /usr/local/bin/akash /usr/local/bin/provider-services \
@@ -39,13 +45,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip3 install --upgrade pip setuptools wheel
 
-# 2- Python deps (تم دمج كل المتطلبات في ملف واحد)
+# 3- تثبيت متطلبات بايثون
 COPY requirements.txt .
-
-# تثبيت المتطلبات المشتركة (تشمل الآن مكتبات الـ AI والـ Controller)
 RUN pip3 install --retries 10 --timeout 120 --resume-retries 20 -r requirements.txt
 
-# 3- Copy code (يشمل gpu.yaml)
+# 4- نسخ الكود
 COPY . .
 
 RUN mkdir -p /models /state
@@ -60,5 +64,4 @@ EXPOSE ${PORT}
 HEALTHCHECK --interval=30s --timeout=10s --start-period=600s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
-# exec لوصول SIGTERM مباشرة لـ uvicorn
 CMD ["sh", "-c", "exec uvicorn ${SERVICE}:app --host 0.0.0.0 --port ${PORT} --workers 1"]
