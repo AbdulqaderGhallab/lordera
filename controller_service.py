@@ -1,20 +1,21 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.7 (On-chain certificate validation)
+Lordera AI — Controller Service v1.6.8 (Local PEM + On-chain cert validation)
 ==============================================================================
-CHANGELOG v1.6.6 -> v1.6.7:
-  • CRITICAL FIX: The controller now verifies the certificate ON-CHAIN
-    (via provider-services query cert list --state valid) instead of just
-    checking whether the local .pem file exists.
-    Root cause: The .pem file existed locally from a previous run, but the
-    certificate was either expired, revoked, or never actually committed
-    to the blockchain. The controller skipped regeneration, then every
-    create_deployment call failed with:
-    "certificate error: certificate has not been committed to blockchain".
-  • Uses "--rie" (revoke if exists) when generating a new certificate to
-    avoid collisions with stale certificates.
-  • Waits 5s after publishing to ensure the chain confirms the certificate
-    before proceeding.
+CHANGELOG v1.6.7 -> v1.6.8:
+  • CRITICAL FIX: The controller now checks BOTH:
+      (a) local PEM file exists at ~/.akash/<address>.pem
+      (b) a valid certificate exists on-chain
+    Regenerates with --rie if EITHER condition fails.
+    Root cause: /root/.akash/ is EPHEMERAL inside Akash. Every deployment
+    update wipes the directory. On the next run, the previous logic saw the
+    on-chain cert was valid and skipped regeneration, but the local PEM was
+    gone. Then akash tx deployment create failed with:
+    "could not open certificate PEM file: ... no such file or directory".
+  • Ensures ~/.akash exists before generation (os.makedirs).
+  • Verifies the PEM was actually created after `cert generate`, and logs
+    the directory contents if not.
+  • Reads wallet address AFTER import (was reading it before in some flows).
 ==============================================================================
 """
 import os
@@ -282,7 +283,15 @@ class AkashCLI:
         logger.info(f"Wallet address: {self.wallet_address}")
 
         # ----------------------------------------------------------------------
-        # 2. Verify certificate ON-CHAIN (not just local file existence)
+        # 2. Ensure ~/.akash exists, then check LOCAL PEM
+        # ----------------------------------------------------------------------
+        akash_home = os.path.expanduser("~/.akash")
+        os.makedirs(akash_home, exist_ok=True)
+        cert_path = f"{akash_home}/{self.wallet_address}.pem"
+        cert_exists_locally = os.path.exists(cert_path)
+
+        # ----------------------------------------------------------------------
+        # 3. Check ON-CHAIN validity
         # ----------------------------------------------------------------------
         cert_valid_on_chain = False
         rc, out, err = await self._run_cmd([
@@ -296,21 +305,27 @@ class AkashCLI:
             try:
                 data = json.loads(out)
                 certs = data.get("certificates", [])
-                if certs and len(certs) > 0:
-                    cert_valid_on_chain = True
-                    logger.info(f"Valid certificate found on-chain for {self.wallet_address}")
+                cert_valid_on_chain = len(certs) > 0
             except Exception as e:
                 logger.warning(f"Failed to parse on-chain cert query: {e} (raw={out[:200]})")
         else:
             logger.warning(f"Cert query failed (rc={rc}): {err.strip()[:200]}")
 
-        if not cert_valid_on_chain:
+        logger.info(
+            f"Certificate status: local_pem={cert_exists_locally}, "
+            f"on_chain_valid={cert_valid_on_chain}, path={cert_path}"
+        )
+
+        # ----------------------------------------------------------------------
+        # 4. Regenerate if EITHER local PEM is missing OR on-chain is invalid
+        # ----------------------------------------------------------------------
+        if not cert_exists_locally or not cert_valid_on_chain:
             logger.warning(
-                f"No valid on-chain certificate for {self.wallet_address}. "
-                f"Generating and publishing a new one (with --rie)..."
+                "Certificate missing locally or invalid on-chain - "
+                "regenerating with --rie (revoke-if-exists)..."
             )
 
-            # Generate new cert (revoke any existing local/on-chain cert first)
+            # Generate new cert (revoke existing on-chain cert if any)
             rc, out, err = await self._run_cmd([
                 "provider-services", "tx", "cert", "generate", "client",
                 "--from", self.wallet_name,
@@ -323,9 +338,17 @@ class AkashCLI:
             if rc != 0:
                 logger.error(f"Failed to generate certificate: {err.strip()[:400]}")
                 return False
-            logger.info("New certificate generated locally. Publishing to chain...")
+
+            # Verify PEM was actually created
+            if not os.path.exists(cert_path):
+                logger.error(f"PEM file NOT created at {cert_path} after generate.")
+                rc2, out2, _ = await self._run_cmd(["ls", "-la", akash_home])
+                logger.error(f"Contents of {akash_home}:\n{out2}")
+                return False
+            logger.info(f"Certificate PEM created at {cert_path}")
 
             # Publish cert to blockchain
+            logger.info("Publishing certificate to blockchain...")
             rc, out, err = await self._run_cmd([
                 "provider-services", "tx", "cert", "publish", "client",
                 "--from", self.wallet_name,
@@ -341,7 +364,7 @@ class AkashCLI:
             logger.info("Certificate published. Waiting 5s for chain confirmation...")
             await asyncio.sleep(5)
 
-            # Verify it's actually on-chain now
+            # Final verification
             rc, out, err = await self._run_cmd([
                 "provider-services", "query", "cert", "list",
                 "--owner", self.wallet_address,
@@ -356,12 +379,14 @@ class AkashCLI:
                     if certs and len(certs) > 0:
                         logger.info("Certificate verified on-chain after publishing.")
                     else:
-                        logger.warning("Certificate publish succeeded but not visible on-chain yet (may take a few blocks).")
+                        logger.warning("Certificate published but not yet visible on-chain (may need a few blocks).")
                 except Exception as e:
                     logger.warning(f"Post-publish cert verify failed: {e}")
+        else:
+            logger.info("Certificate valid both locally and on-chain. Skipping regeneration.")
 
         self._initialized = True
-        logger.info(f"Wallet {self.wallet_name} initialized with valid on-chain certificate: {self.wallet_address}")
+        logger.info(f"Wallet {self.wallet_name} initialized with valid certificate: {self.wallet_address}")
         return True
 
     async def create_deployment(self, sdl_yaml: str, label: str) -> Optional[str]:
@@ -902,7 +927,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.7 starting (On-chain certificate validation)")
+    logger.info("Lordera Controller v1.6.8 starting (Local PEM + On-chain cert validation)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -945,7 +970,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.7",
+    version="1.6.8",
     lifespan=lifespan,
 )
 
@@ -999,7 +1024,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.7",
+        "version": "1.6.8",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
