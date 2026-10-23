@@ -34,7 +34,7 @@ services:
           - global: true
 
   controller:
-    image: abdulqaderghallab/lordera-controller:v17
+    image: abdulqaderghallab/lordera-controller:v18
     env:
       - "GATEWAY_URL=http://gateway:80"
       - "GATEWAY_ADMIN_TOKEN=sec_adm_tok_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t"

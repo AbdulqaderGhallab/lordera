@@ -1,14 +1,15 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.10 (Fix: add --gas to cert revoke/publish)
+Lordera AI — Controller Service v1.6.11 (Fix: add --fees to all tx commands)
 ==============================================================================
-CHANGELOG v1.6.9 -> v1.6.10:
-  • CRITICAL FIX: cert revoke and cert publish were missing --gas.
-    The CLI defaulted to gasWanted=0, so the chain rejected publish with:
-    "out of gas in location: ReadFlat; gasWanted: 0, gasUsed: 1000".
-    Without a published cert, deployment create then failed with
-    "certificate has not been committed to blockchain".
-  • Added "--gas", "500000" to both revoke and publish commands.
+CHANGELOG v1.6.10 -> v1.6.11:
+  • CRITICAL FIX: All tx commands now include explicit --fees 20000uakt.
+    Previously only --gas was provided. The chain rejected cert publish with:
+    "insufficient fees; got: required: 1250uakt".
+    Since AKASH_GAS_PRICES was removed from deploy.yaml, --fees no longer
+    conflicts with client.toml gas-prices.
+  • Applies to: cert revoke, cert publish, deployment create,
+    lease create, deployment close.
 ==============================================================================
 """
 import os
@@ -318,7 +319,7 @@ class AkashCLI:
                 "regenerating (revoke-then-generate)..."
             )
 
-            # Step 1: Best-effort revoke of any existing on-chain cert (WITH --gas)
+            # Step 1: Best-effort revoke of any existing on-chain cert (WITH --fees)
             logger.info("Revoking any existing certificate (best-effort)...")
             rc_rev, out_rev, err_rev = await self._run_cmd([
                 "provider-services", "tx", "cert", "revoke",
@@ -327,6 +328,7 @@ class AkashCLI:
                 "--chain-id", self.chain_id,
                 "--keyring-backend", "test",
                 "--gas", "500000",
+                "--fees", "20000uakt",
                 "-y",
             ])
             if rc_rev != 0:
@@ -335,7 +337,7 @@ class AkashCLI:
                 logger.info("Old certificate revoked (or none existed). Waiting 3s...")
                 await asyncio.sleep(3)
 
-            # Step 2: Generate new cert (NO --rie; local only, no gas needed)
+            # Step 2: Generate new cert (NO --rie; local only, no gas/fees needed)
             logger.info("Generating new certificate...")
             rc, out, err = await self._run_cmd([
                 "provider-services", "tx", "cert", "generate", "client",
@@ -357,7 +359,7 @@ class AkashCLI:
                 return False
             logger.info(f"Certificate PEM created at {cert_path}")
 
-            # Step 3: Publish cert to blockchain (WITH --gas)
+            # Step 3: Publish cert to blockchain (WITH --gas AND --fees)
             logger.info("Publishing certificate to blockchain...")
             rc, out, err = await self._run_cmd([
                 "provider-services", "tx", "cert", "publish", "client",
@@ -366,6 +368,7 @@ class AkashCLI:
                 "--chain-id", self.chain_id,
                 "--keyring-backend", "test",
                 "--gas", "500000",
+                "--fees", "20000uakt",
                 "-y",
             ])
             if rc != 0:
@@ -419,6 +422,7 @@ class AkashCLI:
             "--node", self.node,
             "--chain-id", self.chain_id,
             "--gas", "500000",
+            "--fees", "20000uakt",
             "-y",
             "--keyring-backend", "test",
             "-o", "json"
@@ -531,6 +535,7 @@ class AkashCLI:
             "--node", self.node,
             "--chain-id", self.chain_id,
             "--gas", "500000",
+            "--fees", "20000uakt",
             "-y",
             "--keyring-backend", "test"
         ]
@@ -632,6 +637,7 @@ class AkashCLI:
             "--node", self.node,
             "--chain-id", self.chain_id,
             "--gas", "500000",
+            "--fees", "20000uakt",
             "-y",
             "--keyring-backend", "test"
         ]
@@ -938,7 +944,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.10 starting (Fix: add --gas to cert revoke/publish)")
+    logger.info("Lordera Controller v1.6.11 starting (Fix: add --fees to all tx commands)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -981,7 +987,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.10",
+    version="1.6.11",
     lifespan=lifespan,
 )
 
@@ -1035,7 +1041,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.10",
+        "version": "1.6.11",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
