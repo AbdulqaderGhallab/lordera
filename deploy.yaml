@@ -34,9 +34,9 @@ services:
           - global: true
 
   controller:
-    image: abdulqaderghallab/lordera-controller:v10
+    image: abdulqaderghallab/lordera-controller:v11
     env:
-      - "GATEWAY_URL=http://gateway:80"
+      - "GATEWAY_URL=http://gateway:8000"
       - "GATEWAY_ADMIN_TOKEN=sec_adm_tok_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t"
       - "AKASH_MNEMONIC=spray more old swing service clap satoshi name apart notable soon install erode wide sniff sketch feel ride picture senior summer grunt seed dutch"
       - "AKASH_NODE=https://rpc.akashnet.net:443"
