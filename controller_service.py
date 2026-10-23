@@ -1,17 +1,14 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.9 (Fix: remove unsupported --rie flag)
+Lordera AI — Controller Service v1.6.10 (Fix: add --gas to cert revoke/publish)
 ==============================================================================
-CHANGELOG v1.6.8 -> v1.6.9:
-  • CRITICAL FIX: provider-services binary does NOT support the --rie flag.
-    The controller used to call:
-      provider-services tx cert generate client --rie
-    which failed with: "Error: unknown flag: --rie"
-    Now it performs TWO steps:
-      1) provider-services tx cert revoke  (best-effort; ignore error if none)
-      2) provider-services tx cert generate client  (no --rie)
-    This finally allows cert regeneration after the ephemeral /root/.akash/
-    directory is wiped on every Akash deployment update.
+CHANGELOG v1.6.9 -> v1.6.10:
+  • CRITICAL FIX: cert revoke and cert publish were missing --gas.
+    The CLI defaulted to gasWanted=0, so the chain rejected publish with:
+    "out of gas in location: ReadFlat; gasWanted: 0, gasUsed: 1000".
+    Without a published cert, deployment create then failed with
+    "certificate has not been committed to blockchain".
+  • Added "--gas", "500000" to both revoke and publish commands.
 ==============================================================================
 """
 import os
@@ -321,7 +318,7 @@ class AkashCLI:
                 "regenerating (revoke-then-generate)..."
             )
 
-            # Step 1: Best-effort revoke of any existing on-chain cert
+            # Step 1: Best-effort revoke of any existing on-chain cert (WITH --gas)
             logger.info("Revoking any existing certificate (best-effort)...")
             rc_rev, out_rev, err_rev = await self._run_cmd([
                 "provider-services", "tx", "cert", "revoke",
@@ -329,6 +326,7 @@ class AkashCLI:
                 "--node", self.node,
                 "--chain-id", self.chain_id,
                 "--keyring-backend", "test",
+                "--gas", "500000",
                 "-y",
             ])
             if rc_rev != 0:
@@ -337,7 +335,7 @@ class AkashCLI:
                 logger.info("Old certificate revoked (or none existed). Waiting 3s...")
                 await asyncio.sleep(3)
 
-            # Step 2: Generate new cert (NO --rie flag; not supported by this binary)
+            # Step 2: Generate new cert (NO --rie; local only, no gas needed)
             logger.info("Generating new certificate...")
             rc, out, err = await self._run_cmd([
                 "provider-services", "tx", "cert", "generate", "client",
@@ -359,7 +357,7 @@ class AkashCLI:
                 return False
             logger.info(f"Certificate PEM created at {cert_path}")
 
-            # Publish cert to blockchain
+            # Step 3: Publish cert to blockchain (WITH --gas)
             logger.info("Publishing certificate to blockchain...")
             rc, out, err = await self._run_cmd([
                 "provider-services", "tx", "cert", "publish", "client",
@@ -367,6 +365,7 @@ class AkashCLI:
                 "--node", self.node,
                 "--chain-id", self.chain_id,
                 "--keyring-backend", "test",
+                "--gas", "500000",
                 "-y",
             ])
             if rc != 0:
@@ -939,7 +938,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.9 starting (Fix: remove unsupported --rie)")
+    logger.info("Lordera Controller v1.6.10 starting (Fix: add --gas to cert revoke/publish)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -982,7 +981,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.9",
+    version="1.6.10",
     lifespan=lifespan,
 )
 
@@ -1036,7 +1035,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.9",
+        "version": "1.6.10",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
