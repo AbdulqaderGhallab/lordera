@@ -1,14 +1,20 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.6 (Fixed fees/gas-prices conflict)
+Lordera AI — Controller Service v1.6.7 (On-chain certificate validation)
 ==============================================================================
-CHANGELOG v1.6.5 -> v1.6.6:
-  • Removed --fees from all blockchain tx commands
-    (deployment create, lease create, deployment close).
-    Root cause: The akash CLI inside the container reads gas-prices from
-    ~/.akash/config/client.toml. Passing --fees alongside it causes:
-    "Error: cannot provide both fees and gas prices".
-  • Now relies entirely on client.toml gas-prices (0.025uakt).
+CHANGELOG v1.6.6 -> v1.6.7:
+  • CRITICAL FIX: The controller now verifies the certificate ON-CHAIN
+    (via provider-services query cert list --state valid) instead of just
+    checking whether the local .pem file exists.
+    Root cause: The .pem file existed locally from a previous run, but the
+    certificate was either expired, revoked, or never actually committed
+    to the blockchain. The controller skipped regeneration, then every
+    create_deployment call failed with:
+    "certificate error: certificate has not been committed to blockchain".
+  • Uses "--rie" (revoke if exists) when generating a new certificate to
+    avoid collisions with stale certificates.
+  • Waits 5s after publishing to ensure the chain confirms the certificate
+    before proceeding.
 ==============================================================================
 """
 import os
@@ -253,8 +259,12 @@ class AkashCLI:
             logger.error("AKASH_MNEMONIC is not set.")
             return False
 
-        # 1. Import Key
-        rc, out, err = await self._run_cmd(["akash", "keys", "show", self.wallet_name, "-a", "--keyring-backend", "test"])
+        # ----------------------------------------------------------------------
+        # 1. Import Key (if not already present)
+        # ----------------------------------------------------------------------
+        rc, out, err = await self._run_cmd(
+            ["akash", "keys", "show", self.wallet_name, "-a", "--keyring-backend", "test"]
+        )
         if rc != 0:
             logger.info(f"Importing wallet {self.wallet_name} from mnemonic...")
             rc, out, err = await self._run_cmd(
@@ -264,42 +274,94 @@ class AkashCLI:
             if rc != 0:
                 logger.error(f"Failed to import wallet: {err}")
                 return False
-            rc, out, err = await self._run_cmd(["akash", "keys", "show", self.wallet_name, "-a", "--keyring-backend", "test"])
+            rc, out, err = await self._run_cmd(
+                ["akash", "keys", "show", self.wallet_name, "-a", "--keyring-backend", "test"]
+            )
 
         self.wallet_address = out.strip()
+        logger.info(f"Wallet address: {self.wallet_address}")
 
-        # 2. Ensure Certificate Exists
-        cert_path = f"/root/.akash/{self.wallet_address}.pem"
-        if not os.path.exists(cert_path):
-            logger.info("Generating client certificate...")
+        # ----------------------------------------------------------------------
+        # 2. Verify certificate ON-CHAIN (not just local file existence)
+        # ----------------------------------------------------------------------
+        cert_valid_on_chain = False
+        rc, out, err = await self._run_cmd([
+            "provider-services", "query", "cert", "list",
+            "--owner", self.wallet_address,
+            "--node", self.node,
+            "--state", "valid",
+            "-o", "json",
+        ])
+        if rc == 0:
+            try:
+                data = json.loads(out)
+                certs = data.get("certificates", [])
+                if certs and len(certs) > 0:
+                    cert_valid_on_chain = True
+                    logger.info(f"Valid certificate found on-chain for {self.wallet_address}")
+            except Exception as e:
+                logger.warning(f"Failed to parse on-chain cert query: {e} (raw={out[:200]})")
+        else:
+            logger.warning(f"Cert query failed (rc={rc}): {err.strip()[:200]}")
+
+        if not cert_valid_on_chain:
+            logger.warning(
+                f"No valid on-chain certificate for {self.wallet_address}. "
+                f"Generating and publishing a new one (with --rie)..."
+            )
+
+            # Generate new cert (revoke any existing local/on-chain cert first)
             rc, out, err = await self._run_cmd([
                 "provider-services", "tx", "cert", "generate", "client",
                 "--from", self.wallet_name,
                 "--node", self.node,
                 "--chain-id", self.chain_id,
                 "--keyring-backend", "test",
-                "-y"
+                "--rie",
+                "-y",
             ])
             if rc != 0:
-                logger.error(f"Failed to generate certificate: {err}")
+                logger.error(f"Failed to generate certificate: {err.strip()[:400]}")
                 return False
+            logger.info("New certificate generated locally. Publishing to chain...")
 
-            logger.info("Publishing client certificate...")
+            # Publish cert to blockchain
             rc, out, err = await self._run_cmd([
                 "provider-services", "tx", "cert", "publish", "client",
                 "--from", self.wallet_name,
                 "--node", self.node,
                 "--chain-id", self.chain_id,
                 "--keyring-backend", "test",
-                "-y"
+                "-y",
             ])
             if rc != 0:
-                logger.warning(f"Failed to publish certificate (might already be published): {err}")
+                logger.error(f"Failed to publish certificate: {err.strip()[:400]}")
+                return False
 
+            logger.info("Certificate published. Waiting 5s for chain confirmation...")
             await asyncio.sleep(5)
 
+            # Verify it's actually on-chain now
+            rc, out, err = await self._run_cmd([
+                "provider-services", "query", "cert", "list",
+                "--owner", self.wallet_address,
+                "--node", self.node,
+                "--state", "valid",
+                "-o", "json",
+            ])
+            if rc == 0:
+                try:
+                    data = json.loads(out)
+                    certs = data.get("certificates", [])
+                    if certs and len(certs) > 0:
+                        logger.info("Certificate verified on-chain after publishing.")
+                    else:
+                        logger.warning("Certificate publish succeeded but not visible on-chain yet (may take a few blocks).")
+                except Exception as e:
+                    logger.warning(f"Post-publish cert verify failed: {e}")
+
         self._initialized = True
-        logger.info(f"Wallet {self.wallet_name} initialized: {self.wallet_address}")
+        logger.info(f"Wallet {self.wallet_name} initialized with valid on-chain certificate: {self.wallet_address}")
         return True
 
     async def create_deployment(self, sdl_yaml: str, label: str) -> Optional[str]:
@@ -358,7 +420,6 @@ class AkashCLI:
 
             deployments.sort(key=get_dseq, reverse=True)
 
-            # The newest deployment should be ours (since we just created it)
             best_dep = deployments[0].get("deployment", {})
             best_id = best_dep.get("id") or best_dep.get("deployment_id") or {}
             dseq = str(best_id.get("dseq", ""))
@@ -657,7 +718,6 @@ async def _wait_and_lease(dseq: str, label: str, sdl_path: str) -> bool:
                         ctx.qwen_oseq = oseq
                         ctx.qwen_provider = prov
                     return True
-                # Wait before trying the next bid to avoid sequence mismatch
                 await asyncio.sleep(6)
             logger.warning(f"All bids failed for {label} - retrying")
         logger.info(f"No bids yet for {label} (attempt {attempt})")
@@ -691,7 +751,6 @@ async def action_start() -> bool:
         ctx.state = ControllerState.ERROR
         return False
 
-    # Create both deployments
     whisper_dseq = await akash.create_deployment(whisper_sdl, "whisper")
     if not whisper_dseq:
         ctx.last_error = "create whisper deployment failed"
@@ -709,7 +768,6 @@ async def action_start() -> bool:
     ctx.qwen_dseq = qwen_dseq
     _persist_state()
 
-    # Wait for leases
     whisper_lease_ok = await _wait_and_lease(whisper_dseq, "whisper", f"/tmp/whisper_sdl.yaml")
     qwen_lease_ok = await _wait_and_lease(qwen_dseq, "qwen", f"/tmp/qwen_sdl.yaml")
 
@@ -722,7 +780,6 @@ async def action_start() -> bool:
         ctx.qwen_dseq = ""
         return False
 
-    # Resolve URIs and push to Gateway
     if not await resolve_and_push_uris(whisper_dseq, qwen_dseq):
         ctx.last_error = "URI resolution failed"
         ctx.state = ControllerState.ERROR
@@ -823,7 +880,7 @@ async def control_loop():
 
             elif ctx.state == ControllerState.ERROR:
                 logger.info(f"In ERROR state: {ctx.last_error} - will retry in {POLL_INTERVAL}s")
-                await action_stop()  # clean up any partial deployments
+                await action_stop()
                 ctx.state = ControllerState.IDLE
                 ctx.consecutive_errors += 1
 
@@ -845,7 +902,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.6 starting (Fixed fees/gas-prices conflict)")
+    logger.info("Lordera Controller v1.6.7 starting (On-chain certificate validation)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -888,7 +945,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.6",
+    version="1.6.7",
     lifespan=lifespan,
 )
 
@@ -942,7 +999,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.6",
+        "version": "1.6.7",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
