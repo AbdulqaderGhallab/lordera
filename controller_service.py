@@ -1,15 +1,14 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.5 (Fixed Lease Fees)
+Lordera AI — Controller Service v1.6.6 (Fixed fees/gas-prices conflict)
 ==============================================================================
-CHANGELOG v1.6.4 -> v1.6.5:
-  • CRITICAL FIX: Added --fees 20000uakt to all blockchain tx commands
+CHANGELOG v1.6.5 -> v1.6.6:
+  • Removed --fees from all blockchain tx commands
     (deployment create, lease create, deployment close).
-    Root cause: Without fees, lease creation failed silently on-chain,
-    causing bids to expire and the controller to report "failed to secure lease".
-  • Added a 6-second safety sleep between bid attempts to avoid
-    account sequence mismatch when sending rapid transactions.
-  • Added better error logging (stdout + stderr) for create_lease failures.
+    Root cause: The akash CLI inside the container reads gas-prices from
+    ~/.akash/config/client.toml. Passing --fees alongside it causes:
+    "Error: cannot provide both fees and gas prices".
+  • Now relies entirely on client.toml gas-prices (0.025uakt).
 ==============================================================================
 """
 import os
@@ -322,7 +321,6 @@ class AkashCLI:
             "--node", self.node,
             "--chain-id", self.chain_id,
             "--gas", "500000",
-            "--fees", "20000uakt",
             "-y",
             "--keyring-backend", "test",
             "-o", "json"
@@ -436,7 +434,6 @@ class AkashCLI:
             "--node", self.node,
             "--chain-id", self.chain_id,
             "--gas", "500000",
-            "--fees", "20000uakt",
             "-y",
             "--keyring-backend", "test"
         ]
@@ -538,7 +535,6 @@ class AkashCLI:
             "--node", self.node,
             "--chain-id", self.chain_id,
             "--gas", "500000",
-            "--fees", "20000uakt",
             "-y",
             "--keyring-backend", "test"
         ]
@@ -849,7 +845,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.5 starting (Fixed Lease Fees)")
+    logger.info("Lordera Controller v1.6.6 starting (Fixed fees/gas-prices conflict)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -892,7 +888,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.5",
+    version="1.6.6",
     lifespan=lifespan,
 )
 
@@ -946,7 +942,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.5",
+        "version": "1.6.6",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
