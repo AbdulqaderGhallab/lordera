@@ -1,14 +1,15 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.4 (Separate GPU Deployments)
+Lordera AI — Controller Service v1.6.5 (Fixed Lease Fees)
 ==============================================================================
-CHANGELOG v1.6.3 -> v1.6.4:
-  • Completely rewritten to manage TWO SEPARATE deployments:
-      - whisper deployment using /app/whisper.yaml
-      - qwen deployment using /app/qwen.yaml
-  • Removed all references to a combined gpu.yaml.
-  • Each deployment has its own DSEQ, lease, and URI.
-  • Waits for both URIs then pushes them to the Gateway.
+CHANGELOG v1.6.4 -> v1.6.5:
+  • CRITICAL FIX: Added --fees 20000uakt to all blockchain tx commands
+    (deployment create, lease create, deployment close).
+    Root cause: Without fees, lease creation failed silently on-chain,
+    causing bids to expire and the controller to report "failed to secure lease".
+  • Added a 6-second safety sleep between bid attempts to avoid
+    account sequence mismatch when sending rapid transactions.
+  • Added better error logging (stdout + stderr) for create_lease failures.
 ==============================================================================
 """
 import os
@@ -213,7 +214,7 @@ async def push_downstream_urls(whisper_url: str, qwen_url: str) -> bool:
 
 
 # ==============================================================================
-# Akash CLI Client (unchanged from v1.6.3, but with separate deployment handling)
+# Akash CLI Client
 # ==============================================================================
 class AkashCLI:
     def __init__(self, dry_run: bool = False):
@@ -241,7 +242,7 @@ class AkashCLI:
             self._initialized = True
             self.wallet_address = "akash1dryrun"
             return True
-            
+
         if self._initialized:
             return True
 
@@ -265,7 +266,7 @@ class AkashCLI:
                 logger.error(f"Failed to import wallet: {err}")
                 return False
             rc, out, err = await self._run_cmd(["akash", "keys", "show", self.wallet_name, "-a", "--keyring-backend", "test"])
-            
+
         self.wallet_address = out.strip()
 
         # 2. Ensure Certificate Exists
@@ -283,7 +284,7 @@ class AkashCLI:
             if rc != 0:
                 logger.error(f"Failed to generate certificate: {err}")
                 return False
-                
+
             logger.info("Publishing client certificate...")
             rc, out, err = await self._run_cmd([
                 "provider-services", "tx", "cert", "publish", "client",
@@ -295,7 +296,7 @@ class AkashCLI:
             ])
             if rc != 0:
                 logger.warning(f"Failed to publish certificate (might already be published): {err}")
-            
+
             await asyncio.sleep(5)
 
         self._initialized = True
@@ -321,6 +322,7 @@ class AkashCLI:
             "--node", self.node,
             "--chain-id", self.chain_id,
             "--gas", "500000",
+            "--fees", "20000uakt",
             "-y",
             "--keyring-backend", "test",
             "-o", "json"
@@ -331,7 +333,7 @@ class AkashCLI:
             return None
 
         await asyncio.sleep(5)
-        
+
         cmd = [
             "akash", "query", "deployment", "list",
             "--owner", self.wallet_address,
@@ -343,30 +345,30 @@ class AkashCLI:
         if rc != 0:
             logger.error(f"Query deployments failed: {err}")
             return None
-            
+
         try:
             data = json.loads(out)
             deployments = data.get("deployments", [])
             if not deployments:
                 logger.error(f"No active deployments found after creating {label}.")
                 return None
-            
+
             def get_dseq(dep):
                 d = dep.get("deployment", {})
                 id_obj = d.get("id") or d.get("deployment_id") or {}
                 return int(id_obj.get("dseq", 0))
 
             deployments.sort(key=get_dseq, reverse=True)
-            
+
             # The newest deployment should be ours (since we just created it)
             best_dep = deployments[0].get("deployment", {})
             best_id = best_dep.get("id") or best_dep.get("deployment_id") or {}
             dseq = str(best_id.get("dseq", ""))
-            
+
             if not dseq:
                 logger.error(f"Could not extract dseq from {deployments[0]}")
                 return None
-                
+
             logger.info(f"Created {label} deployment -> DSEQ {dseq}")
             return dseq
         except Exception as e:
@@ -434,14 +436,15 @@ class AkashCLI:
             "--node", self.node,
             "--chain-id", self.chain_id,
             "--gas", "500000",
+            "--fees", "20000uakt",
             "-y",
             "--keyring-backend", "test"
         ]
         rc, out, err = await self._run_cmd(cmd)
         if rc != 0:
-            logger.error(f"create_lease failed: {err}")
+            logger.error(f"create_lease failed (rc={rc}) for {provider}: stderr={err.strip()[:400]} stdout={out.strip()[:400]}")
             return False
-        
+
         logger.info(f"Lease created dseq={dseq} provider={provider}")
 
         cmd = [
@@ -455,10 +458,10 @@ class AkashCLI:
         ]
         rc, out, err = await self._run_cmd(cmd)
         if rc != 0:
-            logger.error(f"send-manifest failed: {err}")
+            logger.error(f"send-manifest failed for {provider}: {err.strip()[:400]}")
             return False
-            
-        logger.info(f"Manifest sent successfully for dseq={dseq}")
+
+        logger.info(f"Manifest sent successfully for dseq={dseq} provider={provider}")
         return True
 
     async def get_deployment(self, dseq: str) -> Optional[Dict[str, Any]]:
@@ -479,7 +482,7 @@ class AkashCLI:
         if rc != 0:
             logger.warning(f"fetch leases failed: {err}")
             return None
-            
+
         try:
             data = json.loads(out)
             leases = data.get("leases", [])
@@ -506,7 +509,7 @@ class AkashCLI:
         if rc != 0:
             logger.warning(f"lease-status failed: {err}")
             return None
-            
+
         try:
             status = json.loads(out)
             services_dict = {}
@@ -535,6 +538,7 @@ class AkashCLI:
             "--node", self.node,
             "--chain-id", self.chain_id,
             "--gas", "500000",
+            "--fees", "20000uakt",
             "-y",
             "--keyring-backend", "test"
         ]
@@ -542,7 +546,7 @@ class AkashCLI:
         if rc != 0:
             logger.error(f"close_deployment failed: {err}")
             return False
-            
+
         logger.info(f"Closed DSEQ {dseq}")
         return True
 
@@ -657,6 +661,8 @@ async def _wait_and_lease(dseq: str, label: str, sdl_path: str) -> bool:
                         ctx.qwen_oseq = oseq
                         ctx.qwen_provider = prov
                     return True
+                # Wait before trying the next bid to avoid sequence mismatch
+                await asyncio.sleep(6)
             logger.warning(f"All bids failed for {label} - retrying")
         logger.info(f"No bids yet for {label} (attempt {attempt})")
         await asyncio.sleep(AKASH_BIDS_INTERVAL)
@@ -785,7 +791,7 @@ async def control_loop():
             if status:
                 ctx.last_gateway_status = status
                 ctx.last_gateway_check_at = time.time()
-                
+
                 queue_depth = int(status.get("queue_size", 0) or 0)
                 if queue_depth > 0:
                     ctx.last_activity_at = time.time()
@@ -843,7 +849,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.4 starting (Separate GPU Deployments)")
+    logger.info("Lordera Controller v1.6.5 starting (Fixed Lease Fees)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -886,7 +892,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.4",
+    version="1.6.5",
     lifespan=lifespan,
 )
 
@@ -940,7 +946,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.4",
+        "version": "1.6.5",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
