@@ -125,5 +125,5 @@ jobs:
             PORT=8003
           push: true
           tags: |
-            abdulqaderghallab/lordera-controller:v15
+            abdulqaderghallab/lordera-controller:v16
             abdulqaderghallab/lordera-controller:latest

@@ -1,21 +1,17 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.8 (Local PEM + On-chain cert validation)
+Lordera AI — Controller Service v1.6.9 (Fix: remove unsupported --rie flag)
 ==============================================================================
-CHANGELOG v1.6.7 -> v1.6.8:
-  • CRITICAL FIX: The controller now checks BOTH:
-      (a) local PEM file exists at ~/.akash/<address>.pem
-      (b) a valid certificate exists on-chain
-    Regenerates with --rie if EITHER condition fails.
-    Root cause: /root/.akash/ is EPHEMERAL inside Akash. Every deployment
-    update wipes the directory. On the next run, the previous logic saw the
-    on-chain cert was valid and skipped regeneration, but the local PEM was
-    gone. Then akash tx deployment create failed with:
-    "could not open certificate PEM file: ... no such file or directory".
-  • Ensures ~/.akash exists before generation (os.makedirs).
-  • Verifies the PEM was actually created after `cert generate`, and logs
-    the directory contents if not.
-  • Reads wallet address AFTER import (was reading it before in some flows).
+CHANGELOG v1.6.8 -> v1.6.9:
+  • CRITICAL FIX: provider-services binary does NOT support the --rie flag.
+    The controller used to call:
+      provider-services tx cert generate client --rie
+    which failed with: "Error: unknown flag: --rie"
+    Now it performs TWO steps:
+      1) provider-services tx cert revoke  (best-effort; ignore error if none)
+      2) provider-services tx cert generate client  (no --rie)
+    This finally allows cert regeneration after the ephemeral /root/.akash/
+    directory is wiped on every Akash deployment update.
 ==============================================================================
 """
 import os
@@ -322,17 +318,33 @@ class AkashCLI:
         if not cert_exists_locally or not cert_valid_on_chain:
             logger.warning(
                 "Certificate missing locally or invalid on-chain - "
-                "regenerating with --rie (revoke-if-exists)..."
+                "regenerating (revoke-then-generate)..."
             )
 
-            # Generate new cert (revoke existing on-chain cert if any)
+            # Step 1: Best-effort revoke of any existing on-chain cert
+            logger.info("Revoking any existing certificate (best-effort)...")
+            rc_rev, out_rev, err_rev = await self._run_cmd([
+                "provider-services", "tx", "cert", "revoke",
+                "--from", self.wallet_name,
+                "--node", self.node,
+                "--chain-id", self.chain_id,
+                "--keyring-backend", "test",
+                "-y",
+            ])
+            if rc_rev != 0:
+                logger.warning(f"Cert revoke failed (may not exist): {err_rev.strip()[:200]}")
+            else:
+                logger.info("Old certificate revoked (or none existed). Waiting 3s...")
+                await asyncio.sleep(3)
+
+            # Step 2: Generate new cert (NO --rie flag; not supported by this binary)
+            logger.info("Generating new certificate...")
             rc, out, err = await self._run_cmd([
                 "provider-services", "tx", "cert", "generate", "client",
                 "--from", self.wallet_name,
                 "--node", self.node,
                 "--chain-id", self.chain_id,
                 "--keyring-backend", "test",
-                "--rie",
                 "-y",
             ])
             if rc != 0:
@@ -927,7 +939,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.8 starting (Local PEM + On-chain cert validation)")
+    logger.info("Lordera Controller v1.6.9 starting (Fix: remove unsupported --rie)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -970,7 +982,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.8",
+    version="1.6.9",
     lifespan=lifespan,
 )
 
@@ -1024,7 +1036,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.8",
+        "version": "1.6.9",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
