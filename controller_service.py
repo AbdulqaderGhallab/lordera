@@ -1,15 +1,15 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.14 (Add v1beta5 to REST bid endpoints)
+Lordera AI — Controller Service v1.6.15 (Reduce tx fees to 1500uakt)
 ==============================================================================
-CHANGELOG v1.6.13 -> v1.6.14:
-  • CRITICAL FIX: The REST endpoint /akash/market/v1beta4/bids/list returns
-    {"code":12,"message":"Not Implemented"} on ALL public nodes (verified
-    in-container via curl against polkachu, publicnode, lavenderfive,
-    akashnet). The working endpoint is /akash/market/v1beta5/bids/list
-    (confirmed returning real bids).
-  • fetch_bids now tries v1beta5 FIRST, then falls back to v1beta4/v1beta3.
-  • This unblocks the bid lookup, so the controller can accept leases.
+CHANGELOG v1.6.14 -> v1.6.15:
+  • Reduced --fees from 20000uakt to 1500uakt on all tx commands.
+    Reason: wallet balance dropped to ~18.7k uakt, so 20000uakt fees
+    rejected by the chain (insufficient funds). 1500uakt is safely above
+    the 1250uakt minimum required by the chain, and allows ~12 tx/cycle.
+  • Applies to: cert revoke, cert publish, deployment create,
+    lease create, deployment close.
+  • NO resource changes, NO logic changes.
 ==============================================================================
 """
 import os
@@ -319,7 +319,7 @@ class AkashCLI:
                 "regenerating (revoke-then-generate)..."
             )
 
-            # Step 1: Best-effort revoke of any existing on-chain cert (WITH --fees)
+            # Step 1: Best-effort revoke of any existing on-chain cert (fees=1500uakt)
             logger.info("Revoking any existing certificate (best-effort)...")
             rc_rev, out_rev, err_rev = await self._run_cmd([
                 "provider-services", "tx", "cert", "revoke",
@@ -328,7 +328,7 @@ class AkashCLI:
                 "--chain-id", self.chain_id,
                 "--keyring-backend", "test",
                 "--gas", "500000",
-                "--fees", "20000uakt",
+                "--fees", "1500uakt",
                 "-y",
             ])
             if rc_rev != 0:
@@ -359,7 +359,7 @@ class AkashCLI:
                 return False
             logger.info(f"Certificate PEM created at {cert_path}")
 
-            # Step 3: Publish cert to blockchain (WITH --gas AND --fees)
+            # Step 3: Publish cert to blockchain (fees=1500uakt)
             logger.info("Publishing certificate to blockchain...")
             rc, out, err = await self._run_cmd([
                 "provider-services", "tx", "cert", "publish", "client",
@@ -368,7 +368,7 @@ class AkashCLI:
                 "--chain-id", self.chain_id,
                 "--keyring-backend", "test",
                 "--gas", "500000",
-                "--fees", "20000uakt",
+                "--fees", "1500uakt",
                 "-y",
             ])
             if rc != 0:
@@ -422,7 +422,7 @@ class AkashCLI:
             "--node", self.node,
             "--chain-id", self.chain_id,
             "--gas", "500000",
-            "--fees", "20000uakt",
+            "--fees", "1500uakt",
             "-y",
             "--keyring-backend", "test",
             "-o", "json"
@@ -613,7 +613,7 @@ class AkashCLI:
             "--node", self.node,
             "--chain-id", self.chain_id,
             "--gas", "500000",
-            "--fees", "20000uakt",
+            "--fees", "1500uakt",
             "-y",
             "--keyring-backend", "test"
         ]
@@ -715,7 +715,7 @@ class AkashCLI:
             "--node", self.node,
             "--chain-id", self.chain_id,
             "--gas", "500000",
-            "--fees", "20000uakt",
+            "--fees", "1500uakt",
             "-y",
             "--keyring-backend", "test"
         ]
@@ -1022,7 +1022,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.14 starting (v1beta5 REST endpoints)")
+    logger.info("Lordera Controller v1.6.15 starting (reduced fees to 1500uakt)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -1065,7 +1065,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.14",
+    version="1.6.15",
     lifespan=lifespan,
 )
 
@@ -1119,7 +1119,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.14",
+        "version": "1.6.15",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
