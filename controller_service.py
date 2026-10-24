@@ -1,15 +1,14 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.11 (Fix: add --fees to all tx commands)
+Lordera AI — Controller Service v1.6.12 (Fix: read bid.id, not bid_id)
 ==============================================================================
-CHANGELOG v1.6.10 -> v1.6.11:
-  • CRITICAL FIX: All tx commands now include explicit --fees 20000uakt.
-    Previously only --gas was provided. The chain rejected cert publish with:
-    "insufficient fees; got: required: 1250uakt".
-    Since AKASH_GAS_PRICES was removed from deploy.yaml, --fees no longer
-    conflicts with client.toml gas-prices.
-  • Applies to: cert revoke, cert publish, deployment create,
-    lease create, deployment close.
+CHANGELOG v1.6.11 -> v1.6.12:
+  • CRITICAL FIX: fetch_bids now reads bid["id"] (the correct Akash field)
+    instead of bid["bid_id"]. Because the wrong key was used, the controller
+    always saw an empty bids list, then reported:
+    "No bid accepted for whisper within 120.0s".
+    Now we read bid["id"], falling back to bid["bid_id"] for older CLIs.
+  • Applies to: fetch_bids only. All other logic unchanged.
 ==============================================================================
 """
 import os
@@ -498,8 +497,10 @@ class AkashCLI:
             bids = data.get("bids", [])
             result = []
             for b in bids:
-                bid_id = b.get("bid", {}).get("bid_id", {})
-                price = b.get("bid", {}).get("price", {})
+                bid_obj = b.get("bid", {})
+                # FIX: Akash returns bid["id"], not bid["bid_id"].
+                bid_id = bid_obj.get("id", {}) or bid_obj.get("bid_id", {})
+                price = bid_obj.get("price", {})
                 result.append({
                     "bid": {
                         "id": {
@@ -944,7 +945,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.11 starting (Fix: add --fees to all tx commands)")
+    logger.info("Lordera Controller v1.6.12 starting (Fix: read bid.id, not bid_id)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -987,7 +988,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.11",
+    version="1.6.12",
     lifespan=lifespan,
 )
 
@@ -1041,7 +1042,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.11",
+        "version": "1.6.12",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
