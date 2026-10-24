@@ -1,17 +1,15 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.13 (REST API for bid queries)
+Lordera AI — Controller Service v1.6.14 (Add v1beta5 to REST bid endpoints)
 ==============================================================================
-CHANGELOG v1.6.12 -> v1.6.13:
-  • CRITICAL FIX: The `akash query market bid list` CLI inside the container
-    always returns {"bids":[]} even when bids exist on-chain (verified by
-    comparing the same query from the host, which returns bids). The CLI is
-    unreliable for bid listing in our container.
-  • fetch_bids now queries Akash REST API endpoints directly via httpx
-    (4 fallback URLs, v1beta4 then v1beta3). This bypasses the broken CLI.
-  • Falls back to the CLI only if all REST endpoints fail.
-  • Filters bids: only `open`/`active` states are kept; `closed` are skipped.
-  • Extensive logging so future issues are diagnosable in one glance.
+CHANGELOG v1.6.13 -> v1.6.14:
+  • CRITICAL FIX: The REST endpoint /akash/market/v1beta4/bids/list returns
+    {"code":12,"message":"Not Implemented"} on ALL public nodes (verified
+    in-container via curl against polkachu, publicnode, lavenderfive,
+    akashnet). The working endpoint is /akash/market/v1beta5/bids/list
+    (confirmed returning real bids).
+  • fetch_bids now tries v1beta5 FIRST, then falls back to v1beta4/v1beta3.
+  • This unblocks the bid lookup, so the controller can accept leases.
 ==============================================================================
 """
 import os
@@ -491,7 +489,8 @@ class AkashCLI:
         ]
 
         for base_url in rest_endpoints:
-            for version in ("v1beta4", "v1beta3"):
+            # v1beta5 first (v1beta4 returns {"code":12,"Not Implemented"} on all public nodes)
+            for version in ("v1beta5", "v1beta4", "v1beta3"):
                 try:
                     url = f"{base_url}/akash/market/{version}/bids/list"
                     params = {
@@ -504,6 +503,10 @@ class AkashCLI:
                         logger.debug(f"REST {base_url}/{version} -> HTTP {r.status_code}")
                         continue
                     data = r.json()
+                    # Skip known "Not Implemented" responses
+                    if isinstance(data, dict) and data.get("code") == 12:
+                        logger.debug(f"REST {base_url}/{version} -> Not Implemented")
+                        continue
                     raw_bids = data.get("bids", []) or []
                     if not raw_bids:
                         logger.debug(f"REST {base_url}/{version} -> 0 bids")
@@ -1019,7 +1022,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.13 starting (REST API for bid queries)")
+    logger.info("Lordera Controller v1.6.14 starting (v1beta5 REST endpoints)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -1062,7 +1065,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.13",
+    version="1.6.14",
     lifespan=lifespan,
 )
 
@@ -1116,7 +1119,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.13",
+        "version": "1.6.14",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
