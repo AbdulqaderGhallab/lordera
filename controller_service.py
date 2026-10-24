@@ -1,14 +1,17 @@
 """
 ==============================================================================
-Lordera AI — Controller Service v1.6.12 (Fix: read bid.id, not bid_id)
+Lordera AI — Controller Service v1.6.13 (REST API for bid queries)
 ==============================================================================
-CHANGELOG v1.6.11 -> v1.6.12:
-  • CRITICAL FIX: fetch_bids now reads bid["id"] (the correct Akash field)
-    instead of bid["bid_id"]. Because the wrong key was used, the controller
-    always saw an empty bids list, then reported:
-    "No bid accepted for whisper within 120.0s".
-    Now we read bid["id"], falling back to bid["bid_id"] for older CLIs.
-  • Applies to: fetch_bids only. All other logic unchanged.
+CHANGELOG v1.6.12 -> v1.6.13:
+  • CRITICAL FIX: The `akash query market bid list` CLI inside the container
+    always returns {"bids":[]} even when bids exist on-chain (verified by
+    comparing the same query from the host, which returns bids). The CLI is
+    unreliable for bid listing in our container.
+  • fetch_bids now queries Akash REST API endpoints directly via httpx
+    (4 fallback URLs, v1beta4 then v1beta3). This bypasses the broken CLI.
+  • Falls back to the CLI only if all REST endpoints fail.
+  • Filters bids: only `open`/`active` states are kept; `closed` are skipped.
+  • Extensive logging so future issues are diagnosable in one glance.
 ==============================================================================
 """
 import os
@@ -477,6 +480,75 @@ class AkashCLI:
         if self.dry_run:
             return [{"bid": {"id": {"gseq": 1, "oseq": 1, "provider": "akash1dryprovider"}, "price": {"amount": "1000"}}}]
 
+        # ------------------------------------------------------------------
+        # Strategy 1: REST API (primary — bypasses the broken CLI bid query)
+        # ------------------------------------------------------------------
+        rest_endpoints = [
+            "https://akash-api.polkachu.com",
+            "https://akash-rest.publicnode.com",
+            "https://akash-api.lavenderfive.com",
+            "https://api.akashnet.net",
+        ]
+
+        for base_url in rest_endpoints:
+            for version in ("v1beta4", "v1beta3"):
+                try:
+                    url = f"{base_url}/akash/market/{version}/bids/list"
+                    params = {
+                        "filters.owner": self.wallet_address,
+                        "filters.dseq": str(dseq),
+                        "pagination.limit": "50",
+                    }
+                    r = await http_client.get(url, params=params, timeout=15.0)
+                    if r.status_code != 200:
+                        logger.debug(f"REST {base_url}/{version} -> HTTP {r.status_code}")
+                        continue
+                    data = r.json()
+                    raw_bids = data.get("bids", []) or []
+                    if not raw_bids:
+                        logger.debug(f"REST {base_url}/{version} -> 0 bids")
+                        continue
+
+                    result: List[Dict[str, Any]] = []
+                    for b in raw_bids:
+                        bid_obj = b.get("bid", {})
+                        state = str(bid_obj.get("state", "")).lower()
+                        # Skip closed/lost bids; keep open or active
+                        if state and state not in ("open", "active"):
+                            continue
+                        bid_id = bid_obj.get("id", {}) or bid_obj.get("bid_id", {})
+                        price = bid_obj.get("price", {})
+                        result.append({
+                            "bid": {
+                                "id": {
+                                    "gseq": int(bid_id.get("gseq", 1)),
+                                    "oseq": int(bid_id.get("oseq", 1)),
+                                    "provider": bid_id.get("provider", "")
+                                },
+                                "price": {
+                                    "amount": price.get("amount", "10000")
+                                }
+                            }
+                        })
+
+                    if result:
+                        logger.info(
+                            f"fetch_bids via REST ({base_url}/{version}) -> "
+                            f"{len(result)} open bids for dseq={dseq}"
+                        )
+                        return result
+                    else:
+                        logger.info(
+                            f"REST {base_url}/{version} returned {len(raw_bids)} bids, "
+                            f"none in open/active state"
+                        )
+                except Exception as e:
+                    logger.debug(f"REST {base_url}/{version} exception: {type(e).__name__}: {e}")
+
+        # ------------------------------------------------------------------
+        # Strategy 2: CLI fallback (in case REST is unreachable)
+        # ------------------------------------------------------------------
+        logger.info(f"REST bid lookup failed for dseq={dseq}; falling back to CLI")
         if not await self._ensure_initialized():
             return []
 
@@ -489,7 +561,7 @@ class AkashCLI:
         ]
         rc, out, err = await self._run_cmd(cmd)
         if rc != 0:
-            logger.warning(f"fetch_bids failed: {err}")
+            logger.warning(f"fetch_bids CLI failed: {err.strip()[:300]}")
             return []
 
         try:
@@ -498,7 +570,9 @@ class AkashCLI:
             result = []
             for b in bids:
                 bid_obj = b.get("bid", {})
-                # FIX: Akash returns bid["id"], not bid["bid_id"].
+                state = str(bid_obj.get("state", "")).lower()
+                if state and state not in ("open", "active"):
+                    continue
                 bid_id = bid_obj.get("id", {}) or bid_obj.get("bid_id", {})
                 price = bid_obj.get("price", {})
                 result.append({
@@ -945,7 +1019,7 @@ async def lifespan(app: FastAPI):
     global http_client, controller_task, stop_event
 
     logger.info("=" * 70)
-    logger.info("Lordera Controller v1.6.12 starting (Fix: read bid.id, not bid_id)")
+    logger.info("Lordera Controller v1.6.13 starting (REST API for bid queries)")
     logger.info(f"Config: poll={POLL_INTERVAL}s idle={IDLE_TIMEOUT}s dry_run={DRY_RUN}")
     logger.info(f"Akash: node={AKASH_NODE} chain={AKASH_CHAIN_ID}")
     logger.info(f"Binaries: akash={AKASH_AVAILABLE}, provider-services={PROVIDER_SERVICES_AVAILABLE}")
@@ -988,7 +1062,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera Controller Service",
     description="Monitors Gateway queue and manages on-demand Akash GPU deployments via CLI.",
-    version="1.6.12",
+    version="1.6.13",
     lifespan=lifespan,
 )
 
@@ -1042,7 +1116,7 @@ class StatusResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera Controller",
-        "version": "1.6.12",
+        "version": "1.6.13",
         "endpoints": {
             "health":      "GET  /health",
             "status":      "GET  /status",
