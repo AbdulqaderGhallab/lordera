@@ -1,10 +1,4 @@
-# ==============================================================================
-# Lordera Gateway — Dependencies (Groq + Pollinations, v3.1.0)
-# ==============================================================================
-# No GPU, no blockchain, no controller — Groq and Pollinations handle AI.
-# ==============================================================================
-
-# Core web & API
+# Lordera Gateway — Dependencies (v3.3.0)
 fastapi
 uvicorn[standard]
 httpx

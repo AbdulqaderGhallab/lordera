@@ -3,682 +3,415 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lordera AI - واجهة الاختبار</title>
+    <title>Lordera AI</title>
     <style>
         :root {
-            --bg: #0f172a;
-            --card-bg: #1e293b;
+            --bg-base: #0b1120;
+            --bg-panel: #1e293b;
+            --bg-user: #2563eb;
+            --bg-ai: #334155;
             --text: #f8fafc;
-            --text-muted: #94a3b8;
+            --muted: #94a3b8;
+            --border: #475569;
             --primary: #3b82f6;
-            --primary-hover: #2563eb;
             --success: #10b981;
             --danger: #ef4444;
-            --border: #334155;
         }
-
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-
+        * { box-sizing: border-box; margin: 0; padding: 0;
+            font-family: 'Segoe UI', Tahoma, sans-serif; }
         body {
-            background-color: var(--bg);
-            color: var(--text);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            min-height: 100vh;
-            padding: 20px;
+            background: var(--bg-base); color: var(--text);
+            display: flex; justify-content: center;
+            height: 100vh; overflow: hidden;
         }
-
-        .container {
-            background-color: var(--card-bg);
-            border-radius: 16px;
-            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
-            width: 100%;
-            max-width: 700px;
-            padding: 30px;
-            border: 1px solid var(--border);
+        .app {
+            width: 100%; max-width: 900px; height: 100%;
+            display: flex; flex-direction: column;
+            background: var(--bg-panel);
+            box-shadow: 0 0 30px rgba(0,0,0,0.5);
         }
-
+        /* Header */
         .header {
-            text-align: center;
-            margin-bottom: 25px;
+            padding: 14px 20px; background: var(--bg-base);
+            border-bottom: 1px solid var(--border);
+            display: flex; align-items: center; justify-content: space-between;
         }
-
         .header h1 {
-            font-size: 24px;
-            margin-bottom: 8px;
+            font-size: 20px;
             background: linear-gradient(to right, #60a5fa, #a78bfa);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
         }
+        .status { font-size: 12px; color: var(--success);
+                  display: flex; align-items: center; gap: 6px; }
+        .dot { width: 8px; height: 8px; background: var(--success);
+               border-radius: 50%; animation: pulse 2s infinite; }
+        @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+        .dot.offline { background: var(--danger); animation: none; }
 
-        .header p {
-            color: var(--text-muted);
-            font-size: 14px;
+        /* Chat area */
+        .chat {
+            flex: 1; padding: 20px; overflow-y: auto;
+            display: flex; flex-direction: column; gap: 14px;
         }
+        .chat::-webkit-scrollbar { width: 6px; }
+        .chat::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
 
-        /* Tabs */
-        .tabs {
-            display: flex;
-            background-color: var(--bg);
-            border-radius: 8px;
-            padding: 4px;
-            margin-bottom: 20px;
-            flex-wrap: wrap; /* Allow wrapping on small screens */
+        .msg {
+            display: flex; gap: 10px; max-width: 88%;
+            animation: slide 0.25s ease;
         }
+        @keyframes slide { from{opacity:0; transform: translateY(8px)} to{opacity:1; transform:none} }
+        .msg.user { align-self: flex-start; flex-direction: row-reverse; }
+        .msg.ai   { align-self: flex-end; }
+        .avatar {
+            width: 36px; height: 36px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-size: 18px; flex-shrink: 0;
+        }
+        .avatar.user { background: #475569; }
+        .avatar.ai   { background: linear-gradient(135deg, #1d4ed8, #7c3aed); }
+        .bubble {
+            padding: 12px 16px; border-radius: 14px;
+            font-size: 15px; line-height: 1.6;
+            word-wrap: break-word; max-width: 100%;
+        }
+        .user .bubble { background: var(--bg-user); color: white; border-top-right-radius: 3px; }
+        .ai .bubble   { background: var(--bg-ai); color: var(--text); border-top-left-radius: 3px; }
 
-        .tab {
-            flex: 1;
-            text-align: center;
-            padding: 10px 5px;
-            cursor: pointer;
-            border-radius: 6px;
-            color: var(--text-muted);
-            font-weight: bold;
-            font-size: 13px;
-            transition: all 0.3s ease;
-            min-width: 100px;
+        .typing { display: flex; gap: 5px; padding: 4px 0; }
+        .typing span {
+            width: 8px; height: 8px; background: var(--muted);
+            border-radius: 50%; animation: bounce 1.4s infinite ease-in-out both;
         }
+        .typing span:nth-child(1){animation-delay:-0.32s}
+        .typing span:nth-child(2){animation-delay:-0.16s}
+        @keyframes bounce { 0%,80%,100%{transform:scale(0)} 40%{transform:scale(1)} }
 
-        .tab.active {
-            background-color: var(--primary);
-            color: white;
-            box-shadow: 0 2px 10px rgba(59, 130, 246, 0.3);
-        }
-
-        /* Content */
-        .tab-content {
-            display: none;
-        }
-
-        .tab-content.active {
-            display: block;
-            animation: fadeIn 0.3s ease;
-        }
-
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(5px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-
-        .input-group {
-            margin-bottom: 20px;
-        }
-
-        .input-group label {
-            display: block;
-            margin-bottom: 8px;
-            font-size: 14px;
-            color: var(--text-muted);
-        }
-
-        textarea, select {
-            width: 100%;
-            background-color: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            padding: 12px;
-            color: var(--text);
-            font-size: 14px;
-        }
-
-        textarea {
-            height: 120px;
-            resize: none;
-        }
-
-        textarea:focus, select:focus {
-            outline: none;
-            border-color: var(--primary);
-        }
-
-        .file-drop {
-            border: 2px dashed var(--border);
-            border-radius: 8px;
-            padding: 30px;
-            text-align: center;
-            cursor: pointer;
-            transition: border-color 0.3s ease;
-            background-color: var(--bg);
-        }
-
-        .file-drop:hover {
-            border-color: var(--primary);
-        }
-
-        .file-drop input {
-            display: none;
-        }
-
-        .file-name {
-            margin-top: 10px;
-            font-size: 14px;
-            color: var(--success);
-        }
-
-        /* Buttons */
-        .btn {
-            width: 100%;
-            padding: 12px;
-            border: none;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: bold;
-            cursor: pointer;
-            transition: background-color 0.3s ease;
-            color: white;
-        }
-
-        .btn-primary {
-            background-color: var(--primary);
-        }
-
-        .btn-primary:hover:not(:disabled) {
-            background-color: var(--primary-hover);
-        }
-
-        .btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-        }
-
-        .btn-download {
-            background-color: var(--success);
-            margin-top: 15px;
-            display: none;
-        }
-
-        /* Status & Results */
-        .status-box {
-            display: none;
-            margin-top: 25px;
-            padding: 15px;
-            border-radius: 8px;
-            background-color: var(--bg);
-            border: 1px solid var(--border);
-            text-align: center;
-        }
-
-        .status-box p {
-            margin-bottom: 5px;
-            font-size: 14px;
-        }
-
-        .spinner {
-            border: 3px solid rgba(255, 255, 255, 0.1);
-            width: 30px;
-            height: 30px;
-            border-radius: 50%;
-            border-left-color: var(--primary);
-            animation: spin 1s linear infinite;
-            margin: 0 auto 10px;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
-        }
-
-        .result-box {
-            display: none;
-            margin-top: 20px;
-        }
+        .chat-img { max-width: 100%; border-radius: 10px; margin-top: 8px;
+                    border: 1px solid var(--border); display: block; }
+        .chat-audio { width: 100%; margin-top: 8px; }
 
         pre {
-            background-color: #0b1120;
-            padding: 15px;
-            border-radius: 8px;
-            overflow-x: auto;
-            color: #a5b4fc;
-            font-size: 13px;
-            line-height: 1.5;
+            background: #0b1120; padding: 10px; border-radius: 8px;
+            overflow-x: auto; font-size: 12px; margin-top: 8px;
             border: 1px solid var(--border);
+            direction: ltr; text-align: left;
+            font-family: 'Courier New', monospace;
         }
+        details summary { cursor: pointer; color: var(--primary); margin-top: 8px; }
 
-        .media-container {
-            background-color: #0b1120;
-            padding: 15px;
-            border-radius: 8px;
-            border: 1px solid var(--border);
-            text-align: center;
+        /* Input */
+        .input-area {
+            padding: 14px 20px; background: var(--bg-base);
+            border-top: 1px solid var(--border);
+            display: flex; align-items: flex-end; gap: 10px;
         }
+        .input-wrap {
+            flex: 1; background: var(--bg-panel);
+            border: 1px solid var(--border); border-radius: 24px;
+            display: flex; align-items: center;
+            padding: 4px 14px; transition: border-color 0.2s;
+        }
+        .input-wrap:focus-within { border-color: var(--primary); }
+        textarea {
+            flex: 1; background: transparent; border: none;
+            color: var(--text); font-size: 15px;
+            resize: none; padding: 10px 0;
+            max-height: 150px; outline: none; overflow-y: auto;
+        }
+        .icon-btn {
+            background: none; border: none; color: var(--muted);
+            font-size: 22px; cursor: pointer; padding: 4px;
+            border-radius: 50%; display: flex; align-items: center;
+            justify-content: center; transition: color 0.2s;
+        }
+        .icon-btn:hover { color: var(--primary); }
+        .send-btn {
+            background: var(--primary); color: white; border: none;
+            width: 44px; height: 44px; border-radius: 50%;
+            cursor: pointer; display: flex; align-items: center;
+            justify-content: center; font-size: 18px;
+            transition: background 0.2s; flex-shrink: 0;
+        }
+        .send-btn:hover { background: #2563eb; }
+        .send-btn:disabled { background: var(--border); cursor: not-allowed; }
 
-        audio {
-            width: 100%;
-            margin-bottom: 10px;
-        }
-
-        img.generated-image {
-            max-width: 100%;
-            border-radius: 8px;
-            border: 1px solid var(--border);
-            margin-bottom: 10px;
-        }
-        
-        .error-text {
-            color: var(--danger);
-            font-weight: bold;
-        }
-
-        .note {
-            font-size: 12px;
-            color: var(--text-muted);
-            margin-top: -5px;
-            margin-bottom: 10px;
+        .file-pill {
+            display: none; font-size: 12px; color: var(--success);
+            padding: 4px 10px; border-radius: 12px;
+            background: rgba(16,185,129,0.1);
+            border: 1px solid var(--success);
+            margin: 4px 0;
         }
     </style>
 </head>
 <body>
-
-    <div class="container">
-        <div class="header">
-            <h1>Lordera AI</h1>
-            <p>واجهة اختبار النظام (Groq + Pollinations)</p>
+<div class="app">
+    <div class="header">
+        <h1>Lordera AI</h1>
+        <div class="status">
+            <div class="dot" id="statusDot"></div>
+            <span id="statusText">جارٍ الاتصال...</span>
         </div>
+    </div>
 
-        <!-- Tabs -->
-        <div class="tabs">
-            <div class="tab active" onclick="switchTab('audio')">🎵 صوت إلى نص</div>
-            <div class="tab" onclick="switchTab('text')">📝 تحليل نص</div>
-            <div class="tab" onclick="switchTab('tts')">🎙️ نص إلى صوت</div>
-            <div class="tab" onclick="switchTab('image')">🎨 نص إلى صورة</div>
-        </div>
-
-        <!-- Audio Tab -->
-        <div id="tab-audio" class="tab-content active">
-            <div class="input-group">
-                <label>اختر ملفاً صوتياً (mp3, wav, m4a...)</label>
-                <div class="file-drop" onclick="document.getElementById('audioFile').click()">
-                    <input type="file" id="audioFile" accept="audio/*" onchange="updateFileName(this)">
-                    <div>اضغط هنا لاختيار ملف</div>
-                    <div id="fileName" class="file-name"></div>
-                </div>
-            </div>
-            <button id="btnAudio" class="btn btn-primary" onclick="submitAudio()">بدء المعالجة (صوت + تحليل)</button>
-        </div>
-
-        <!-- Text Tab -->
-        <div id="tab-text" class="tab-content">
-            <div class="input-group">
-                <label>أدخل النص المراد تحليله</label>
-                <textarea id="textInput" placeholder="اكتب النص هنا..."></textarea>
-            </div>
-            <button id="btnText" class="btn btn-primary" onclick="submitText()">بدء المعالجة (تحليل فقط)</button>
-        </div>
-
-        <!-- TTS Tab -->
-        <div id="tab-tts" class="tab-content">
-            <div class="input-group">
-                <label>أدخل النص لتحويله إلى صوت (يدعم الإنجليزية حالياً)</label>
-                <div class="note">ملاحظة: نموذج Pollinations الحالي يدعم اللغة الإنجليزية فقط.</div>
-                <textarea id="ttsInput" placeholder="Hello world, this is a test..."></textarea>
-            </div>
-            <div class="input-group">
-                <label>اختر الصوت</label>
-                <select id="ttsVoice">
-                    <option value="nova">Nova (أنثوي دافئ)</option>
-                    <option value="alloy">Alloy (محايد)</option>
-                    <option value="echo">Echo (ذكوري)</option>
-                    <option value="fable">Fable (بريطاني)</option>
-                    <option value="onyx">Onyx (عميق)</option>
-                    <option value="shimmer">Shimmer (ناعم)</option>
-                </select>
-            </div>
-            <button id="btnTTS" class="btn btn-primary" onclick="submitTTS()">توليد الصوت</button>
-        </div>
-
-        <!-- Image Tab -->
-        <div id="tab-image" class="tab-content">
-            <div class="input-group">
-                <label>أدخل وصف الصورة (Prompt)</label>
-                <textarea id="imageInput" placeholder="A futuristic city with flying cars, cyberpunk style, highly detailed, 8k..."></textarea>
-            </div>
-            <button id="btnImage" class="btn btn-primary" onclick="submitImage()">توليد الصورة</button>
-        </div>
-
-        <!-- Status Box -->
-        <div id="statusBox" class="status-box">
-            <div class="spinner" id="spinner"></div>
-            <p id="statusText">جاري الاتصال بالبوابة...</p>
-            <p id="queueText"></p>
-        </div>
-
-        <!-- Result Box (for Text/Audio Analysis) -->
-        <div id="resultBox" class="result-box">
-            <pre id="jsonResult"></pre>
-            <button id="btnDownload" class="btn btn-download" onclick="downloadJSON()">⬇️ تحميل النتيجة (JSON)</button>
-        </div>
-
-        <!-- Result Box (for TTS) -->
-        <div id="ttsResultBox" class="result-box">
-            <div class="media-container">
-                <audio id="ttsAudio" controls></audio>
-                <br>
-                <button id="btnDownloadTTS" class="btn btn-download" onclick="downloadMedia('ttsAudio', 'lordera_speech.mp3')">⬇️ تحميل الصوت (MP3)</button>
-            </div>
-        </div>
-
-        <!-- Result Box (for Image) -->
-        <div id="imageResultBox" class="result-box">
-            <div class="media-container">
-                <img id="generatedImage" class="generated-image" alt="Generated Image">
-                <br>
-                <button id="btnDownloadImage" class="btn btn-download" onclick="downloadMedia('generatedImage', 'lordera_image.jpg')">⬇️ تحميل الصورة (JPG)</button>
+    <div class="chat" id="chatArea">
+        <div class="msg ai">
+            <div class="avatar ai">🤖</div>
+            <div class="bubble">
+                أهلاً بك في Lordera AI! 👋<br>
+                أنا مساعد ذكي — أتكلم معك بشكل طبيعي، وأرسم الصور، وأحوّل النص إلى صوت،
+                وأستمع إلى ملفاتك الصوتية وأحوّلها إلى نص.<br><br>
+                <span style="font-size:13px;color:#94a3b8;">
+                    جرّب: «كيف حالك؟» • «ارسم قطة في مكتبة» • «قل: مرحباً بكم» • «حلّل: المنتج ممتاز لكن السعر مرتفع»
+                </span>
             </div>
         </div>
     </div>
 
-    <script>
-        // ⚠️ الرابط الجديد بعد النشر على Akash (v8)
-        const GATEWAY_URL = "http://ehrdtp1td1e73flsodd94ka5b8.ingress.akash.rhite.co.uk";
-        
-        let currentJobId = null;
-        let currentResult = null;
-        let pollInterval = null;
+    <div class="input-area">
+        <input type="file" id="fileInput" accept="audio/*" style="display:none" onchange="onFilePick()">
+        <button class="icon-btn" onclick="document.getElementById('fileInput').click()" title="إرفاق ملف صوتي">📎</button>
+        <div class="input-wrap">
+            <textarea id="chatInput" rows="1" placeholder="اكتب رسالتك..."></textarea>
+        </div>
+        <button class="send-btn" id="sendBtn" onclick="onSend()">➤</button>
+    </div>
+    <div class="file-pill" id="filePill"></div>
+</div>
 
-        function switchTab(tabName) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
-            
-            const tabs = document.querySelectorAll('.tab');
-            if (tabName === 'audio') {
-                tabs[0].classList.add('active');
-                document.getElementById('tab-audio').classList.add('active');
-            } else if (tabName === 'text') {
-                tabs[1].classList.add('active');
-                document.getElementById('tab-text').classList.add('active');
-            } else if (tabName === 'tts') {
-                tabs[2].classList.add('active');
-                document.getElementById('tab-tts').classList.add('active');
-            } else if (tabName === 'image') {
-                tabs[3].classList.add('active');
-                document.getElementById('tab-image').classList.add('active');
-            }
-            resetUI();
+<script>
+// ═══════════════════════════════════════════════════════════════════
+// CONFIG — ضع رابط الـ Ingress هنا
+// ═══════════════════════════════════════════════════════════════════
+const API = "http://ehrdtp1td1e73flsodd94ka5b8.ingress.akash.rhite.co.uk";
+
+// State
+let history = [];          // [{role, content}]
+let attachedFile = null;
+let busy = false;
+
+// Refs
+const chatArea  = document.getElementById('chatArea');
+const chatInput = document.getElementById('chatInput');
+const fileInput = document.getElementById('fileInput');
+const sendBtn   = document.getElementById('sendBtn');
+const filePill  = document.getElementById('filePill');
+const statusDot = document.getElementById('statusDot');
+const statusText= document.getElementById('statusText');
+
+// ═══════════════════════════════════════════════════════════════════
+// Utilities
+// ═══════════════════════════════════════════════════════════════════
+function esc(s) {
+    return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;")
+        .replace(/\n/g, "<br>");
+}
+
+function addBubble(role, html) {
+    const id = 'm' + Date.now() + Math.random().toString(36).slice(2,6);
+    const div = document.createElement('div');
+    div.className = `msg ${role}`;
+    div.id = id;
+    div.innerHTML = `
+        <div class="avatar ${role}">${role === 'user' ? '👤' : '🤖'}</div>
+        <div class="bubble" id="${id}-b">${html}</div>
+    `;
+    chatArea.appendChild(div);
+    chatArea.scrollTop = chatArea.scrollHeight;
+    return id;
+}
+
+function updateBubble(id, html) {
+    const b = document.getElementById(`${id}-b`);
+    if (b) b.innerHTML = html;
+    chatArea.scrollTop = chatArea.scrollHeight;
+}
+
+function typingHtml() {
+    return `<div class="typing"><span></span><span></span><span></span></div>`;
+}
+
+function setBusy(b) {
+    busy = b;
+    sendBtn.disabled = b;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Health check
+// ═══════════════════════════════════════════════════════════════════
+async function checkHealth() {
+    try {
+        const r = await fetch(`${API}/health`);
+        if (!r.ok) throw new Error();
+        const d = await r.json();
+        if (d.groq_api_configured) {
+            statusDot.classList.remove('offline');
+            statusText.textContent = 'متصل';
+        } else {
+            statusDot.classList.add('offline');
+            statusText.textContent = 'مفتاح Groq مفقود';
+        }
+    } catch {
+        statusDot.classList.add('offline');
+        statusText.textContent = 'غير متصل';
+    }
+}
+checkHealth();
+setInterval(checkHealth, 30000);
+
+// ═══════════════════════════════════════════════════════════════════
+// File attach
+// ═══════════════════════════════════════════════════════════════════
+function onFilePick() {
+    if (fileInput.files.length > 0) {
+        attachedFile = fileInput.files[0];
+        filePill.style.display = 'inline-block';
+        filePill.textContent = `📎 ${attachedFile.name}`;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Auto-resize textarea
+// ═══════════════════════════════════════════════════════════════════
+chatInput.addEventListener('input', function () {
+    this.style.height = 'auto';
+    this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+});
+chatInput.addEventListener('keydown', function (e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        onSend();
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// Main entry
+// ═══════════════════════════════════════════════════════════════════
+async function onSend() {
+    if (busy) return;
+
+    const text = chatInput.value.trim();
+    const file = attachedFile;
+
+    if (!text && !file) return;
+
+    chatInput.value = '';
+    chatInput.style.height = 'auto';
+    attachedFile = null;
+    fileInput.value = '';
+    filePill.style.display = 'none';
+
+    setBusy(true);
+    try {
+        if (file) {
+            await handleAudio(file);
+        } else {
+            await handleText(text);
+        }
+    } finally {
+        setBusy(false);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TEXT → /chat
+// ═══════════════════════════════════════════════════════════════════
+async function handleText(text) {
+    addBubble('user', esc(text));
+    history.push({ role: 'user', content: text });
+
+    const msgId = addBubble('ai', typingHtml());
+
+    try {
+        const res = await fetch(`${API}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messages: history }),
+        });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        updateBubble(msgId, renderChat(data));
+        if (data.reply) history.push({ role: 'assistant', content: data.reply });
+    } catch (e) {
+        updateBubble(msgId, `<span style="color:#ef4444">❌ ${esc(e.message)}</span>`);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// AUDIO → /transcribe → /chat
+// ═══════════════════════════════════════════════════════════════════
+async function handleAudio(file) {
+    addBubble('user', `🎤 <em>[رسالة صوتية: ${esc(file.name)}]</em>`);
+
+    const msgId = addBubble('ai', typingHtml() + `<div style="font-size:12px;color:#94a3b8;margin-top:6px">جاري الاستماع...</div>`);
+
+    try {
+        const fd = new FormData();
+        fd.append('file', file);
+        const res = await fetch(`${API}/transcribe`, { method: 'POST', body: fd });
+        if (!res.ok) {
+            const err = await res.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${res.status}`);
+        }
+        const { transcript } = await res.json();
+
+        if (!transcript || !transcript.trim()) {
+            updateBubble(msgId, `📝 لم أسمع شيئاً واضحاً في التسجيل.`);
+            return;
         }
 
-        function updateFileName(input) {
-            const fileNameDiv = document.getElementById('fileName');
-            if (input.files && input.files.length > 0) {
-                fileNameDiv.textContent = `تم اختيار: ${input.files[0].name}`;
-            }
+        updateBubble(msgId,
+            `<b>📝 سمعت:</b><br>${esc(transcript)}<br><br>` + typingHtml()
+        );
+
+        history.push({ role: 'user', content: transcript });
+
+        const chatRes = await fetch(`${API}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ messages: history }),
+        });
+        if (!chatRes.ok) {
+            const err = await chatRes.json().catch(() => ({}));
+            throw new Error(err.detail || `HTTP ${chatRes.status}`);
         }
+        const data = await chatRes.json();
 
-        function resetUI() {
-            document.getElementById('statusBox').style.display = 'none';
-            document.getElementById('resultBox').style.display = 'none';
-            document.getElementById('ttsResultBox').style.display = 'none';
-            document.getElementById('imageResultBox').style.display = 'none';
-            
-            document.getElementById('btnDownload').style.display = 'none';
-            document.getElementById('btnDownloadTTS').style.display = 'none';
-            document.getElementById('btnDownloadImage').style.display = 'none';
-            
-            document.getElementById('btnAudio').disabled = false;
-            document.getElementById('btnText').disabled = false;
-            document.getElementById('btnTTS').disabled = false;
-            document.getElementById('btnImage').disabled = false;
-            
-            document.getElementById('spinner').style.display = 'block';
-            if (pollInterval) clearInterval(pollInterval);
-            currentResult = null;
+        updateBubble(msgId,
+            `<b>📝 سمعت:</b><br>${esc(transcript)}<br><br>` + renderChat(data)
+        );
+        if (data.reply) history.push({ role: 'assistant', content: data.reply });
+    } catch (e) {
+        updateBubble(msgId, `<span style="color:#ef4444">❌ ${esc(e.message)}</span>`);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// Render chat response (text + optional image/audio/analysis)
+// ═══════════════════════════════════════════════════════════════════
+function renderChat(data) {
+    let html = esc(data.reply || '');
+    if (data.media_base64 && data.media_content_type) {
+        if (data.media_content_type.startsWith('image/')) {
+            html += `<img src="${data.media_base64}" class="chat-img" alt="generated">`;
+        } else if (data.media_content_type.startsWith('audio/')) {
+            html += `<audio src="${data.media_base64}" controls class="chat-audio"></audio>`;
         }
-
-        function showStatus(msg, queueMsg = "") {
-            document.getElementById('statusBox').style.display = 'block';
-            document.getElementById('statusText').textContent = msg;
-            document.getElementById('queueText').textContent = queueMsg;
-        }
-
-        // ==========================================
-        // 1. Audio / Text Analysis (Groq)
-        // ==========================================
-
-        async function submitAudio() {
-            const fileInput = document.getElementById('audioFile');
-            if (!fileInput.files || fileInput.files.length === 0) {
-                alert("الرجاء اختيار ملف صوتي أولاً");
-                return;
-            }
-
-            resetUI();
-            document.getElementById('btnAudio').disabled = true;
-            showStatus("جاري رفع الملف الصوتي...");
-
-            const formData = new FormData();
-            formData.append("file", fileInput.files[0]);
-
-            try {
-                const response = await fetch(`${GATEWAY_URL}/jobs`, {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const data = await response.json();
-                
-                if (!response.ok) throw new Error(data.detail || "فشل في إرسال الطلب");
-
-                startPolling(data.job_id, data.position, data.estimated_wait_seconds);
-
-            } catch (error) {
-                showError(error.message);
-            }
-        }
-
-        async function submitText() {
-            const text = document.getElementById('textInput').value.trim();
-            if (!text) {
-                alert("الرجاء إدخال نص أولاً");
-                return;
-            }
-
-            resetUI();
-            document.getElementById('btnText').disabled = true;
-            showStatus("جاري إرسال النص...");
-
-            try {
-                const response = await fetch(`${GATEWAY_URL}/jobs/text`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: text })
-                });
-
-                const data = await response.json();
-                
-                if (!response.ok) throw new Error(data.detail || "فشل في إرسال الطلب");
-
-                startPolling(data.job_id, data.position, data.estimated_wait_seconds);
-
-            } catch (error) {
-                showError(error.message);
-            }
-        }
-
-        function startPolling(jobId, position, waitTime) {
-            currentJobId = jobId;
-            showStatus("تم استلام الطلب. جاري المعالجة...", `موقعك في الطابور: ${position} | الوقت المتوقع: ${Math.round(waitTime)} ثانية`);
-
-            pollInterval = setInterval(async () => {
-                try {
-                    const response = await fetch(`${GATEWAY_URL}/jobs/${jobId}`);
-                    const data = await response.json();
-
-                    if (data.status === 'completed') {
-                        clearInterval(pollInterval);
-                        showResult(data);
-                    } else if (data.status === 'failed') {
-                        clearInterval(pollInterval);
-                        showError(data.error || "فشلت المعالجة في الخدمات الخلفية");
-                    } else {
-                        const qPos = data.position > 0 ? `موقعك في الطابور: ${data.position}` : "قيد المعالجة حالياً...";
-                        showStatus(`الحالة: ${data.status === 'queued' ? 'في الانتظار' : 'جاري المعالجة'}`, qPos);
-                    }
-                } catch (error) {
-                    clearInterval(pollInterval);
-                    showError("فقدان الاتصال بالبوابة");
-                }
-            }, 3000);
-        }
-
-        function showResult(data) {
-            document.getElementById('spinner').style.display = 'none';
-            showStatus("✅ اكتملت المعالجة بنجاح");
-            document.getElementById('btnAudio').disabled = false;
-            document.getElementById('btnText').disabled = false;
-
-            currentResult = {
-                job_id: data.job_id,
-                transcript: data.transcript,
-                analysis: data.analysis,
-                processed_at: new Date().toISOString()
-            };
-
-            document.getElementById('resultBox').style.display = 'block';
-            document.getElementById('jsonResult').textContent = JSON.stringify(currentResult, null, 4);
-            document.getElementById('btnDownload').style.display = 'block';
-        }
-
-        // ==========================================
-        // 2. Text-to-Speech (Pollinations)
-        // ==========================================
-
-        async function submitTTS() {
-            const text = document.getElementById('ttsInput').value.trim();
-            const voice = document.getElementById('ttsVoice').value;
-            
-            if (!text) {
-                alert("الرجاء إدخال النص أولاً");
-                return;
-            }
-
-            resetUI();
-            document.getElementById('btnTTS').disabled = true;
-            showStatus("جاري توليد الصوت... (قد يستغرق بضع ثوانٍ)");
-
-            try {
-                const response = await fetch(`${GATEWAY_URL}/tts`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ text: text, voice: voice })
-                });
-
-                if (!response.ok) {
-                    const err = await response.json();
-                    throw new Error(err.detail || "فشل توليد الصوت");
-                }
-
-                const blob = await response.blob();
-                const url = URL.createObjectURL(blob);
-                
-                const audioEl = document.getElementById('ttsAudio');
-                audioEl.src = url;
-                
-                document.getElementById('spinner').style.display = 'none';
-                showStatus("✅ تم توليد الصوت بنجاح");
-                document.getElementById('ttsResultBox').style.display = 'block';
-                document.getElementById('btnDownloadTTS').style.display = 'block';
-
-            } catch (error) {
-                showError(error.message);
-            } finally {
-                document.getElementById('btnTTS').disabled = false;
-            }
-        }
-
-        // ==========================================
-        // 3. Text-to-Image (Pollinations)
-        // ==========================================
-
-        async function submitImage() {
-            const prompt = document.getElementById('imageInput').value.trim();
-            
-            if (!prompt) {
-                alert("الرجاء إدخال وصف الصورة أولاً");
-                return;
-            }
-
-            resetUI();
-            document.getElementById('btnImage').disabled = true;
-            showStatus("جاري توليد الصورة... (قد يستغرق 10-20 ثانية)");
-
-            try {
-                const response = await fetch(`${GATEWAY_URL}/image`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt: prompt })
-                });
-
-                if (!response.ok) {
-                    const err = await response.json();
-                    throw new Error(err.detail || "فشل توليد الصورة");
-                }
-
-                const blob = await response.blob();
-                const url = URL.createObjectURL(blob);
-                
-                const imgEl = document.getElementById('generatedImage');
-                imgEl.src = url;
-                
-                document.getElementById('spinner').style.display = 'none';
-                showStatus("✅ تم توليد الصورة بنجاح");
-                document.getElementById('imageResultBox').style.display = 'block';
-                document.getElementById('btnDownloadImage').style.display = 'block';
-
-            } catch (error) {
-                showError(error.message);
-            } finally {
-                document.getElementById('btnImage').disabled = false;
-            }
-        }
-
-        // ==========================================
-        // Helpers & Download
-        // ==========================================
-
-        function showError(msg) {
-            document.getElementById('spinner').style.display = 'none';
-            showStatus(`❌ خطأ: ${msg}`);
-            document.getElementById('btnAudio').disabled = false;
-            document.getElementById('btnText').disabled = false;
-            document.getElementById('btnTTS').disabled = false;
-            document.getElementById('btnImage').disabled = false;
-        }
-
-        function downloadJSON() {
-            if (!currentResult) return;
-            const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(currentResult, null, 4));
-            const downloadAnchorNode = document.createElement('a');
-            downloadAnchorNode.setAttribute("href", dataStr);
-            downloadAnchorNode.setAttribute("download", `lordera_result_${currentJobId}.json`);
-            document.body.appendChild(downloadAnchorNode);
-            downloadAnchorNode.click();
-            downloadAnchorNode.remove();
-        }
-
-        function downloadMedia(elementId, filename) {
-            const element = document.getElementById(elementId);
-            if (!element || !element.src) return;
-            
-            // If the src is an object URL (blob), fetch it and download
-            fetch(element.src)
-                .then(res => res.blob())
-                .then(blob => {
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    a.remove();
-                    URL.revokeObjectURL(url);
-                })
-                .catch(err => alert("فشل تحميل الملف: " + err.message));
-        }
-    </script>
+    }
+    if (data.analysis) {
+        html += `<details><summary>📊 التحليل</summary><pre>${esc(JSON.stringify(data.analysis, null, 2))}</pre></details>`;
+    }
+    return html;
+}
+</script>
 </body>
 </html>

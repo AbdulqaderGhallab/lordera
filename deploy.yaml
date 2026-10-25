@@ -3,19 +3,19 @@ version: "2.0"
 
 services:
   gateway:
-    image: abdulqaderghallab/lordera-gateway:v13
+    image: abdulqaderghallab/lordera-gateway:v14
     env:
       # ── Groq API ─────────────────────────────────────────────────────
       - "GROQ_API_KEY=xxx"
       - "GROQ_WHISPER_MODEL=whisper-large-v3"
       - "GROQ_QWEN_MODEL=qwen/qwen3.8-27b"
-      # ── Groq TTS (Orpheus Arabic) ────────────────────────────────────
+      # ── Groq TTS (Orpheus Arabic Saudi) ──────────────────────────────
       - "GROQ_TTS_MODEL=canopylabs/orpheus-arabic-saudi"
       - "GROQ_TTS_VOICE=abdullah"
-      # ── Pollinations.ai (Images ONLY) ────────────────────────────────
+      # ── Pollinations.ai (Images) ─────────────────────────────────────
       - "POLLINATIONS_API_KEY=xxx"
       - "POLLINATIONS_IMAGE_MODEL=flux"
-      # ── Queue & Rate limiting ─────────────────────────────────────────
+      # ── Queue & limits ───────────────────────────────────────────────
       - "MAX_QUEUE_SIZE=50"
       - "REJECT_THRESHOLD=0.9"
       - "JOB_TTL_SECONDS=1800"
@@ -23,6 +23,8 @@ services:
       - "MAX_JOBS_IN_STORE=1000"
       - "RATE_LIMIT_WINDOW=60.0"
       - "RATE_LIMIT_MAX=10"
+      - "CHAT_MAX_HISTORY=20"
+      - "CHAT_MAX_TOKENS=1024"
       # ── Upload & timeouts ────────────────────────────────────────────
       - "MAX_UPLOAD_SIZE=26214400"
       - "WHISPER_TIMEOUT=120.0"
