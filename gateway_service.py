@@ -1,14 +1,17 @@
 """
 ==============================================================================
-Lordera AI — Gateway Service v3.1.3 (Fixed TTS endpoint to gen.pollinations.ai)
+Lordera AI — Gateway Service v3.1.4 (Production Ready)
 ==============================================================================
-CHANGELOG v3.1.2 → v3.1.3:
-  • CRITICAL FIX: TTS was hitting text.pollinations.ai which ignores the API key
-    and enforces a strict 30s rate limit. Switched to gen.pollinations.ai which
-    honors the sk_... API key.
-  • Implemented two fallback methods for TTS: GET /audio/{text} and
-    POST /v1/audio/speech (OpenAI compatible).
-  • Version bumped to 3.1.3.
+CHANGELOG v3.1.3 → v3.1.4:
+  • TTS now uses the official OpenAI-compatible endpoint at
+    https://gen.pollinations.ai/v1/audio/speech (POST) as primary,
+    with GET /audio/{text} as fallback. API key is passed in headers.
+  • Image generation now passes the key in BOTH the Authorization header
+    and the &key= query parameter to bypass the 45s free-tier limit.
+  • Added enhance=true to image URL for better quality.
+  • Image model is configurable via POLLINATIONS_IMAGE_MODEL (default: flux).
+  • Health check reports pollinations_api_configured.
+  • Version bumped to 3.1.4.
 ==============================================================================
 """
 import os
@@ -52,10 +55,10 @@ GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
 GROQ_QWEN_MODEL    = os.getenv("GROQ_QWEN_MODEL", "qwen/qwen3.8-27b")
 
 # Pollinations.ai
-POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
-# ✅ النقطة الجديدة التي تدعم المفتاح
-POLLINATIONS_TTS_BASE = "https://gen.pollinations.ai" 
-POLLINATIONS_IMAGE_BASE = "https://image.pollinations.ai"
+POLLINATIONS_API_KEY     = os.getenv("POLLINATIONS_API_KEY", "")
+POLLINATIONS_TTS_BASE    = "https://gen.pollinations.ai"
+POLLINATIONS_IMAGE_BASE  = "https://image.pollinations.ai"
+POLLINATIONS_IMAGE_MODEL = os.getenv("POLLINATIONS_IMAGE_MODEL", "flux")
 
 WHISPER_TIMEOUT = float(os.getenv("WHISPER_TIMEOUT", "120.0"))
 QWEN_TIMEOUT    = float(os.getenv("QWEN_TIMEOUT",    "60.0"))
@@ -630,12 +633,13 @@ async def lifespan(app: FastAPI):
     global worker_task, cleanup_task, rate_cleanup_task
 
     logger.info("=" * 70)
-    logger.info("Lordera Gateway v3.1.3 starting (Groq + Pollinations)")
+    logger.info("Lordera Gateway v3.1.4 starting (Groq + Pollinations)")
     logger.info(f"Groq API base:    {GROQ_API_BASE}")
     logger.info(f"Whisper model:    {GROQ_WHISPER_MODEL}")
     logger.info(f"Qwen model:       {GROQ_QWEN_MODEL}")
     logger.info(f"Groq key:         {'configured' if GROQ_API_KEY else 'MISSING!'}")
     logger.info(f"Pollinations key: {'configured' if POLLINATIONS_API_KEY else 'not set (using free tier)'}")
+    logger.info(f"Image model:      {POLLINATIONS_IMAGE_MODEL}")
     logger.info(f"Queue:            max={MAX_QUEUE_SIZE}, reject@{REJECT_THRESHOLD*100:.0f}%")
     logger.info(f"Rate limit:       {RATE_LIMIT_MAX} req / {RATE_LIMIT_WINDOW}s per IP")
     logger.info(f"Max upload:       {MAX_UPLOAD_SIZE // (1024*1024)} MB")
@@ -643,6 +647,8 @@ async def lifespan(app: FastAPI):
 
     if not GROQ_API_KEY:
         logger.error("GROQ_API_KEY is not set. All Groq AI calls will fail with 503.")
+    if not POLLINATIONS_API_KEY:
+        logger.warning("POLLINATIONS_API_KEY is not set. Image/TTS will be rate-limited.")
 
     http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(WHISPER_TIMEOUT, connect=10.0),
@@ -678,7 +684,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera AI Gateway",
     description="Async job-based orchestrator using Groq API + Pollinations.ai.",
-    version="3.1.3",
+    version="3.1.4",
     lifespan=lifespan,
 )
 
@@ -722,6 +728,7 @@ class HealthResponse(BaseModel):
     pollinations_api_configured: bool
     groq_whisper_model: str
     groq_qwen_model: str
+    image_model: str
     whisper_circuit_open: bool
     qwen_circuit_open: bool
     queue_size: int
@@ -748,7 +755,7 @@ class ImageRequest(BaseModel):
 async def root():
     return {
         "service": "Lordera AI Gateway",
-        "version": "3.1.3",
+        "version": "3.1.4",
         "backend": "Groq + Pollinations",
         "endpoints": {
             "submit_audio": "POST /jobs",
@@ -775,6 +782,7 @@ async def health_check():
         pollinations_api_configured=pollinations_ok,
         groq_whisper_model=GROQ_WHISPER_MODEL,
         groq_qwen_model=GROQ_QWEN_MODEL,
+        image_model=POLLINATIONS_IMAGE_MODEL,
         whisper_circuit_open=whisper_cb.is_open(),
         qwen_circuit_open=qwen_cb.is_open(),
         queue_size=job_queue.qsize(),
@@ -806,6 +814,7 @@ async def queue_status():
         "qwen_circuit_open":    qwen_cb.is_open(),
         "groq_whisper_model": GROQ_WHISPER_MODEL,
         "groq_qwen_model":    GROQ_QWEN_MODEL,
+        "image_model":        POLLINATIONS_IMAGE_MODEL,
         "groq_api_configured": bool(GROQ_API_KEY),
         "pollinations_api_configured": bool(POLLINATIONS_API_KEY),
     }
@@ -996,34 +1005,33 @@ async def cancel_job(job_id: str):
 @app.post("/tts")
 async def generate_tts(req: TTSRequest):
     """
-    Generates audio from text using the new gen.pollinations.ai endpoint
-    which properly supports API keys.
+    Generates audio from text using the official Pollinations OpenAI-compatible endpoint.
+    The key is passed via the Authorization header to bypass rate limits.
     """
-    # الطريقة الأولى: GET المباشر
-    encoded_text = urllib.parse.quote(req.text)
-    url = f"{POLLINATIONS_TTS_BASE}/audio/{encoded_text}?voice={req.voice}"
-    if POLLINATIONS_API_KEY:
-        url += f"&key={POLLINATIONS_API_KEY}"
-
-    headers = {}
-    if POLLINATIONS_API_KEY:
-        headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"
+    # المسار الأول: POST /v1/audio/speech (المتوافق مع OpenAI)
+    url = f"{POLLINATIONS_TTS_BASE}/v1/audio/speech"
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {POLLINATIONS_API_KEY}" if POLLINATIONS_API_KEY else "",
+    }
+    payload = {
+        "model": "openai-audio",
+        "input": req.text,
+        "voice": req.voice,
+        "response_format": "mp3",
+    }
 
     try:
-        resp = await http_client.get(url, headers=headers, timeout=TTS_TIMEOUT)
-        
-        # إذا فشلت GET، نجرب POST المتوافقة مع OpenAI
+        resp = await http_client.post(url, json=payload, headers=headers, timeout=TTS_TIMEOUT)
+
+        # المسار الثاني: GET /audio/{text} (الاحتياطي)
         if resp.status_code != 200:
-            logger.warning(f"GET TTS failed ({resp.status_code}), trying POST /v1/audio/speech")
-            post_url = f"{POLLINATIONS_TTS_BASE}/v1/audio/speech"
-            payload = {
-                "model": "openai-audio",
-                "input": req.text,
-                "voice": req.voice,
-                "response_format": "mp3"
-            }
-            headers["Content-Type"] = "application/json"
-            resp = await http_client.post(post_url, json=payload, headers=headers, timeout=TTS_TIMEOUT)
+            logger.warning(f"POST TTS failed ({resp.status_code}), trying GET /audio/{{text}}")
+            encoded_text = urllib.parse.quote(req.text)
+            get_url = f"{POLLINATIONS_TTS_BASE}/audio/{encoded_text}?voice={req.voice}"
+            if POLLINATIONS_API_KEY:
+                get_url += f"&key={POLLINATIONS_API_KEY}"
+            resp = await http_client.get(get_url, headers=headers, timeout=TTS_TIMEOUT)
 
         resp.raise_for_status()
 
@@ -1053,9 +1061,16 @@ async def generate_tts(req: TTSRequest):
 
 @app.post("/image")
 async def generate_image(req: ImageRequest):
-    """Generates an image from a prompt using Pollinations.ai FLUX model."""
+    """Generates an image from a prompt using Pollinations.ai."""
     encoded_prompt = urllib.parse.quote(req.prompt)
-    url = f"{POLLINATIONS_IMAGE_BASE}/prompt/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true"
+    url = (
+        f"{POLLINATIONS_IMAGE_BASE}/prompt/{encoded_prompt}"
+        f"?model={POLLINATIONS_IMAGE_MODEL}"
+        f"&width=1024&height=1024"
+        f"&nologo=true"
+        f"&enhance=true"
+    )
+    # تمرير المفتاح في الرابط لضمان قبوله
     if POLLINATIONS_API_KEY:
         url += f"&key={POLLINATIONS_API_KEY}"
 
@@ -1066,10 +1081,18 @@ async def generate_image(req: ImageRequest):
     try:
         resp = await http_client.get(url, headers=headers, timeout=IMAGE_TIMEOUT)
         resp.raise_for_status()
+
+        content_type = resp.headers.get("content-type", "")
+        if "application/json" in content_type:
+            error_data = resp.json()
+            raise HTTPException(status_code=502, detail=f"Pollinations Image error: {error_data}")
+
         return Response(content=resp.content, media_type=resp.headers.get("content-type", "image/jpeg"))
     except httpx.HTTPStatusError as e:
+        logger.error(f"Image generation HTTP {e.response.status_code}: {e.response.text[:300]}")
         raise HTTPException(status_code=502, detail=f"Image generation failed: {e.response.text[:200]}")
     except Exception as e:
+        logger.exception("Image generation error")
         raise HTTPException(status_code=502, detail=f"Image generation error: {type(e).__name__}")
 
 
