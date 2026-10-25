@@ -1,17 +1,14 @@
 """
 ==============================================================================
-Lordera AI — Gateway Service v3.3.0
+Lordera AI — Gateway Service v3.3.1
 Smart Chat Orchestrator + Groq TTS Arabic + Pollinations Images
 ==============================================================================
-CHANGELOG v3.2.0 → v3.3.0:
-  • NEW: /chat endpoint — Qwen acts as a smart orchestrator that decides
-    between normal chat / image generation / TTS / analysis.
-  • NEW: Arabic → English prompt translation for images (Qwen handles it).
-  • NEW: /transcribe endpoint for fast audio → text.
-  • FIX: TTS voice validation (only Orpheus Arabic voices accepted).
-  • FIX: Media returned as base64 inside /chat response.
-  • Chat history is trimmed to last 20 messages to fit Qwen context.
-  • Version bumped to 3.3.0.
+CHANGELOG v3.3.0 → v3.3.1:
+  • FIX: Groq Orpheus Arabic TTS requires response_format="wav", not "mp3".
+    All TTS outputs now use audio/wav (verified: HTTP 200 for all 6 voices).
+  • FIX: /tts endpoint media_type now "audio/wav".
+  • FIX: /chat TTS branch returns data:audio/wav;base64 (not audio/mpeg).
+  • Version bumped to 3.3.1.
 ==============================================================================
 """
 import os
@@ -83,7 +80,7 @@ MAX_TEXT_LENGTH     = int(os.getenv("MAX_TEXT_LENGTH", "10000"))
 CHAT_MAX_HISTORY    = int(os.getenv("CHAT_MAX_HISTORY", "20"))
 CHAT_MAX_TOKENS     = int(os.getenv("CHAT_MAX_TOKENS", "1024"))
 
-# Valid Orpheus Arabic voices on Groq
+# Valid Orpheus Arabic voices on Groq (verified: all return HTTP 200)
 VALID_ARABIC_VOICES = {"abdullah", "fahad", "sultan", "lulwa", "noura", "aisha"}
 
 
@@ -526,11 +523,12 @@ async def _generate_image_bytes(prompt_en: str) -> Tuple[bytes, str]:
 
 
 async def _generate_tts_bytes(text: str, voice: str) -> bytes:
+    # Groq Orpheus Arabic Saudi REQUIRES response_format="wav" (verified).
     json_body = {
         "model": GROQ_TTS_MODEL,
         "input": text,
         "voice": voice,
-        "response_format": "mp3",
+        "response_format": "wav",
     }
     resp = await _groq_request(
         "POST", "/audio/speech",
@@ -628,8 +626,8 @@ async def orchestrate_chat(messages: List[Dict[str, str]], request_id: str) -> D
             return {
                 "reply": reply,
                 "action": "tts",
-                "media_base64": f"data:audio/mpeg;base64,{b64}",
-                "media_content_type": "audio/mpeg",
+                "media_base64": f"data:audio/wav;base64,{b64}",
+                "media_content_type": "audio/wav",
             }
         except Exception as e:
             logger.error(f"[{request_id}] Chat TTS failed: {e}")
@@ -768,7 +766,7 @@ async def lifespan(app: FastAPI):
     global worker_task, cleanup_task, rate_cleanup_task
 
     logger.info("=" * 70)
-    logger.info("Lordera Gateway v3.3.0 starting (Smart Chat + Groq TTS + Pollinations)")
+    logger.info("Lordera Gateway v3.3.1 starting (Smart Chat + Groq TTS + Pollinations)")
     logger.info(f"Groq base:        {GROQ_API_BASE}")
     logger.info(f"Whisper:          {GROQ_WHISPER_MODEL}")
     logger.info(f"Qwen (chat):      {GROQ_QWEN_MODEL}")
@@ -814,7 +812,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera AI Gateway",
     description="Smart chat orchestrator using Groq (Qwen/Whisper/TTS) + Pollinations.",
-    version="3.3.0",
+    version="3.3.1",
     lifespan=lifespan,
 )
 
@@ -902,7 +900,7 @@ class HealthResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera AI Gateway",
-        "version": "3.3.0",
+        "version": "3.3.1",
         "backend": "Groq + Pollinations",
         "endpoints": {
             "chat":        "POST /chat",
@@ -924,7 +922,7 @@ async def root():
 async def health_check():
     return HealthResponse(
         status="healthy" if GROQ_API_KEY else "degraded",
-        version="3.3.0",
+        version="3.3.1",
         groq_api_configured=bool(GROQ_API_KEY),
         pollinations_api_configured=bool(POLLINATIONS_API_KEY),
         groq_whisper_model=GROQ_WHISPER_MODEL,
@@ -1024,7 +1022,7 @@ async def tts_endpoint(req: TTSRequest):
     try:
         audio = await _generate_tts_bytes(text, voice)
         metrics["total_tts"] += 1
-        return Response(content=audio, media_type="audio/mpeg")
+        return Response(content=audio, media_type="audio/wav")
     except HTTPException:
         raise
     except Exception as e:
