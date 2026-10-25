@@ -1,14 +1,16 @@
 """
 ==============================================================================
-Lordera AI — Gateway Service v3.3.1
+Lordera AI — Gateway Service v3.3.2
 Smart Chat Orchestrator + Groq TTS Arabic + Pollinations Images
 ==============================================================================
-CHANGELOG v3.3.0 → v3.3.1:
-  • FIX: Groq Orpheus Arabic TTS requires response_format="wav", not "mp3".
-    All TTS outputs now use audio/wav (verified: HTTP 200 for all 6 voices).
-  • FIX: /tts endpoint media_type now "audio/wav".
-  • FIX: /chat TTS branch returns data:audio/wav;base64 (not audio/mpeg).
-  • Version bumped to 3.3.1.
+CHANGELOG v3.3.1 → v3.3.2:
+  • FIX: Groq Orpheus returns WAV with RIFF size and data chunk size set to
+    0xFFFFFFFF (streaming markers). Browsers refuse to play such files
+    (they appear "empty" even though the audio data is real).
+  • Added _fix_wav_sizes() that recomputes both header fields to actual
+    sizes so standard players (Chrome, Safari, VLC, Windows Media) accept
+    the file.
+  • Version bumped to 3.3.2.
 ==============================================================================
 """
 import os
@@ -16,6 +18,7 @@ import json
 import time
 import uuid
 import re
+import struct
 import base64
 import logging
 import asyncio
@@ -522,6 +525,42 @@ async def _generate_image_bytes(prompt_en: str) -> Tuple[bytes, str]:
     return resp.content, ct
 
 
+def _fix_wav_sizes(data: bytes) -> bytes:
+    """
+    Groq Orpheus returns WAV with RIFF size and 'data' chunk size set to
+    0xFFFFFFFF (streaming markers). Browsers (Chrome, Safari) refuse to play
+    such files — they appear as empty or fail silently — even though the
+    audio data is real and valid.
+
+    This function rewrites both header fields to their actual byte counts,
+    producing a spec-compliant WAV that every player accepts.
+
+    Reference: RFC 2361 (WAVE and AVI Codec Registries).
+    """
+    if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
+        # Not a WAV file — return unchanged (let downstream handle it).
+        return data
+
+    buf = bytearray(data)
+
+    # 1) Fix RIFF chunk size at offset 4 (= total file size - 8 bytes header)
+    struct.pack_into("<I", buf, 4, len(buf) - 8)
+
+    # 2) Walk chunks to locate 'data' and fix its size field
+    pos = 12
+    while pos + 8 <= len(buf):
+        chunk_id   = bytes(buf[pos:pos + 4])
+        chunk_size = struct.unpack_from("<I", buf, pos + 4)[0]
+        if chunk_id == b"data":
+            actual_data_size = len(buf) - pos - 8
+            struct.pack_into("<I", buf, pos + 4, actual_data_size)
+            break
+        # Advance: chunk header (8) + payload + padding if odd size
+        pos += 8 + chunk_size + (chunk_size & 1)
+
+    return bytes(buf)
+
+
 async def _generate_tts_bytes(text: str, voice: str) -> bytes:
     # Groq Orpheus Arabic Saudi REQUIRES response_format="wav" (verified).
     json_body = {
@@ -535,7 +574,8 @@ async def _generate_tts_bytes(text: str, voice: str) -> bytes:
         json_body=json_body,
         timeout=TTS_TIMEOUT, request_id="tts", breaker=tts_cb,
     )
-    return resp.content
+    # Repair RIFF/data header sizes (Groq sets them to 0xFFFFFFFF).
+    return _fix_wav_sizes(resp.content)
 
 
 # ==============================================================================
@@ -766,7 +806,7 @@ async def lifespan(app: FastAPI):
     global worker_task, cleanup_task, rate_cleanup_task
 
     logger.info("=" * 70)
-    logger.info("Lordera Gateway v3.3.1 starting (Smart Chat + Groq TTS + Pollinations)")
+    logger.info("Lordera Gateway v3.3.2 starting (Smart Chat + Groq TTS + Pollinations)")
     logger.info(f"Groq base:        {GROQ_API_BASE}")
     logger.info(f"Whisper:          {GROQ_WHISPER_MODEL}")
     logger.info(f"Qwen (chat):      {GROQ_QWEN_MODEL}")
@@ -812,7 +852,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera AI Gateway",
     description="Smart chat orchestrator using Groq (Qwen/Whisper/TTS) + Pollinations.",
-    version="3.3.1",
+    version="3.3.2",
     lifespan=lifespan,
 )
 
@@ -900,7 +940,7 @@ class HealthResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera AI Gateway",
-        "version": "3.3.1",
+        "version": "3.3.2",
         "backend": "Groq + Pollinations",
         "endpoints": {
             "chat":        "POST /chat",
@@ -922,7 +962,7 @@ async def root():
 async def health_check():
     return HealthResponse(
         status="healthy" if GROQ_API_KEY else "degraded",
-        version="3.3.1",
+        version="3.3.2",
         groq_api_configured=bool(GROQ_API_KEY),
         pollinations_api_configured=bool(POLLINATIONS_API_KEY),
         groq_whisper_model=GROQ_WHISPER_MODEL,

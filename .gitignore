@@ -9,3 +9,6 @@ models/
 *.log
 .env
 Dockerfile.*.patch
+
+# Local deploy — يحتوي أسراراً، لا يُرفع
+deploy.yaml
