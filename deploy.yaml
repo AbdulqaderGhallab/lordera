@@ -3,12 +3,13 @@ version: "2.0"
 
 services:
   gateway:
-    image: abdulqaderghallab/lordera-gateway:v6
+    image: abdulqaderghallab/lordera-gateway:v7
     env:
-      - "WHISPER_SERVICE_URL=http://localhost:8001"
-      - "QWEN_SERVICE_URL=http://localhost:8002"
-      - "INTERNAL_TOKEN=sec_int_tok_9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c3d2e1f0a"
-      - "GATEWAY_ADMIN_TOKEN=sec_adm_tok_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t"
+      # ── Groq API ──────────────────────────────────────────────────────
+      - "GROQ_API_KEY=gsk_REPLACE_WITH_YOUR_KEY"
+      - "GROQ_WHISPER_MODEL=whisper-large-v3"
+      - "GROQ_QWEN_MODEL=qwen/qwen3.8-27b"
+      # ── Queue & Rate limiting ─────────────────────────────────────────
       - "MAX_QUEUE_SIZE=50"
       - "REJECT_THRESHOLD=0.9"
       - "JOB_TTL_SECONDS=1800"
@@ -16,54 +17,18 @@ services:
       - "MAX_JOBS_IN_STORE=1000"
       - "RATE_LIMIT_WINDOW=60.0"
       - "RATE_LIMIT_MAX=10"
-      - "MAX_UPLOAD_SIZE=52428800"
-      - "WHISPER_TIMEOUT=300.0"
-      - "QWEN_TIMEOUT=120.0"
-      - "HEALTH_TIMEOUT=5.0"
+      # ── Upload & timeouts (Groq Whisper limit = 25MB) ────────────────
+      - "MAX_UPLOAD_SIZE=26214400"
+      - "WHISPER_TIMEOUT=120.0"
+      - "QWEN_TIMEOUT=60.0"
+      - "LEGACY_WAIT_TIMEOUT=120.0"
       - "MAX_RETRIES=3"
       - "RETRY_BACKOFF=2.0"
-      - "LEGACY_WAIT_TIMEOUT=600.0"
-    params:
-      storage:
-        controller-state:
-          mount: /state
     expose:
       - port: 8000
         as: 80
         to:
           - global: true
-
-  controller:
-    image: abdulqaderghallab/lordera-controller:v23
-    env:
-      - "GATEWAY_URL=http://gateway:80"
-      - "GATEWAY_ADMIN_TOKEN=sec_adm_tok_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t"
-      - "AKASH_MNEMONIC=spray more old swing service clap satoshi name apart notable soon install erode wide sniff sketch feel ride picture senior summer grunt seed dutch"
-      - "AKASH_NODE=https://rpc.akashnet.net:443"
-      - "AKASH_CHAIN_ID=akashnet-2"
-      - "AKASH_HD_PATH=m/44'/118'/0'/0/0"
-      - "AKASH_RUNTIME_LIMIT_HOURS=4"
-      - "AKASH_BIDS_TIMEOUT=120.0"
-      - "AKASH_BIDS_INTERVAL=5.0"
-      - "WHISPER_SDL_PATH=/app/whisper.yaml"
-      - "QWEN_SDL_PATH=/app/qwen.yaml"
-      - "CONTROLLER_POLL_INTERVAL=30.0"
-      - "CONTROLLER_IDLE_TIMEOUT=600.0"
-      - "CONTROLLER_START_TIMEOUT=300.0"
-      - "CONTROLLER_START_COOLDOWN=60.0"
-      - "CONTROLLER_STOP_COOLDOWN=120.0"
-      - "CONTROLLER_URI_WAIT_TIMEOUT=180.0"
-      - "CONTROLLER_URI_POLL_INTERVAL=10.0"
-      - "CONTROLLER_STATE_FILE=/state/controller_state.json"
-      - "CONTROLLER_DRY_RUN=false"
-    params:
-      storage:
-        controller-state:
-          mount: /state
-    expose:
-      - port: 8003
-        to:
-          - global: false
 
 profiles:
   compute:
@@ -75,11 +40,6 @@ profiles:
           size: 2Gi
         storage:
           - size: 5Gi
-          - name: controller-state
-            size: 1Gi
-            attributes:
-              persistent: true
-              class: beta2
   placement:
     akash:
       pricing:
@@ -89,10 +49,6 @@ profiles:
 
 deployment:
   gateway:
-    akash:
-      profile: lordera-group
-      count: 1
-  controller:
     akash:
       profile: lordera-group
       count: 1

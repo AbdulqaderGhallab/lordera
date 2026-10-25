@@ -6,78 +6,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-whisper:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free Disk Space (Crucial for CUDA images)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-      - uses: actions/checkout@v4
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_TOKEN }}
-      - name: Build and push whisper
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          build-args: |
-            SERVICE=whisper_service
-            PORT=8001
-          push: true
-          tags: |
-            abdulqaderghallab/lordera-whisper:v3
-            abdulqaderghallab/lordera-whisper:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  build-qwen:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Free Disk Space (Crucial for CUDA images)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-      - uses: actions/checkout@v4
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_TOKEN }}
-      - name: Build and push qwen
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          build-args: |
-            SERVICE=qwen_service
-            PORT=8002
-          push: true
-          tags: |
-            abdulqaderghallab/lordera-qwen:v3
-            abdulqaderghallab/lordera-qwen:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
   build-gateway:
     runs-on: ubuntu-latest
     steps:
@@ -99,31 +27,7 @@ jobs:
             PORT=8000
           push: true
           tags: |
-            abdulqaderghallab/lordera-gateway:v6
+            abdulqaderghallab/lordera-gateway:v7
             abdulqaderghallab/lordera-gateway:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
-
-  build-controller:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-      - name: Login to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_TOKEN }}
-      - name: Build and push controller
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile.light
-          build-args: |
-            SERVICE=controller_service
-            PORT=8003
-          push: true
-          tags: |
-            abdulqaderghallab/lordera-controller:v23
-            abdulqaderghallab/lordera-controller:latest

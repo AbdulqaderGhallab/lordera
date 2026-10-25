@@ -1,33 +1,13 @@
 # ==============================================================================
-# Core Web & API Dependencies
+# Lordera Gateway — Dependencies (Groq API backend, v3.0.0)
 # ==============================================================================
+# No GPU, no blockchain, no controller — Groq handles all AI inference.
+# ==============================================================================
+
+# Core web & API
 fastapi
 uvicorn[standard]
 httpx
 pydantic
-pyyaml
 python-multipart
 python-dotenv
-aiohttp
-
-# ==============================================================================
-# Controller & Blockchain Dependencies
-# ==============================================================================
-ecdsa
-cosmospy
-grpcio
-protobuf
-
-# ==============================================================================
-# AI/ML Dependencies (For Whisper & Qwen)
-# ==============================================================================
-# PyTorch & Audio Processing
-torch
-torchaudio
-whisperx
-
-# Transformers & Quantization (For Qwen)
-transformers
-accelerate
-bitsandbytes
-sentencepiece

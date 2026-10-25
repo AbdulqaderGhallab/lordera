@@ -1,3 +1,10 @@
+# ==============================================================================
+# Lordera Gateway — Dockerfile (Groq API backend, v3.0.0)
+# ==============================================================================
+# Minimal image: only the Gateway (FastAPI) is built here.
+# No Akash CLI, no provider-services, no GPU drivers, no blockchain libs.
+# ==============================================================================
+
 FROM python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
@@ -8,41 +15,20 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# 1- تثبيت الأدوات الأساسية + أدوات فك الضغط المطلوبة لسكربت Akash
+# 1- Minimal OS tools (curl for HEALTHCHECK only)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     curl \
-    unzip \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# 2- تحميل وتثبيت Akash و Provider-Services CLI
-RUN curl -sSfL https://raw.githubusercontent.com/akash-network/node/main/install.sh | bash \
-    && curl -sSfL https://raw.githubusercontent.com/akash-network/provider/main/install.sh | bash \
-    && mv ./bin/akash /usr/local/bin/akash \
-    && mv ./bin/provider-services /usr/local/bin/provider-services \
-    && chmod +x /usr/local/bin/akash /usr/local/bin/provider-services \
-    && rm -rf ./bin
+# 2- Install Python deps from requirements.txt (single source of truth)
+COPY requirements.txt .
+RUN pip3 install --retries 10 --timeout 120 -r requirements.txt
 
-# 3- تثبيت متطلبات بايثون (بدون حزمة akash المعطلة)
-RUN pip3 install --retries 10 --timeout 120 \
-        "fastapi>=0.115.0" \
-        "uvicorn[standard]>=0.30.0" \
-        "python-multipart>=0.0.9" \
-        "pydantic>=2.8.0" \
-        "httpx>=0.27.0" \
-        "python-dotenv>=1.0.0" \
-        "ecdsa>=0.18.0" \
-        "cosmospy" \
-        "grpcio>=1.60.0" \
-        "protobuf>=4.25.0" \
-        "aiohttp"
-
-# 4- نسخ الكود
+# 3- Copy application code
 COPY . .
 
-RUN if [ ! -f /app/gpu.yaml ]; then echo 'services: {}' > /app/gpu.yaml; fi
-RUN mkdir -p /models /state
-
+# 4- Runtime config
 ARG SERVICE=gateway_service
 ARG PORT=8000
 ENV SERVICE=${SERVICE} PORT=${PORT}
@@ -52,5 +38,5 @@ EXPOSE ${PORT}
 HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:${PORT}/health || exit 1
 
-# استخدام exec لضمان استقبال إشارات الإيقاف بشكل سليم
+# 5- Run uvicorn (exec for clean signal handling)
 CMD ["sh", "-c", "exec python3 -m uvicorn ${SERVICE}:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips='*'"]
