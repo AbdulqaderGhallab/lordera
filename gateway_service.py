@@ -1,16 +1,14 @@
 """
 ==============================================================================
-Lordera AI — Gateway Service v3.3.2
-Smart Chat Orchestrator + Groq TTS Arabic + Pollinations Images
+Lordera AI — Gateway Service v3.4.0
+Smart Chat Orchestrator + ElevenLabs Expressive Arabic TTS
 ==============================================================================
-CHANGELOG v3.3.1 → v3.3.2:
-  • FIX: Groq Orpheus returns WAV with RIFF size and data chunk size set to
-    0xFFFFFFFF (streaming markers). Browsers refuse to play such files
-    (they appear "empty" even though the audio data is real).
-  • Added _fix_wav_sizes() that recomputes both header fields to actual
-    sizes so standard players (Chrome, Safari, VLC, Windows Media) accept
-    the file.
-  • Version bumped to 3.3.2.
+CHANGELOG v3.3.2 → v3.4.0:
+  • MAJOR: Replaced Groq Orpheus TTS with ElevenLabs (eleven_turbo_v2_5).
+  • NEW: Voice acting capabilities via ElevenLabs audio tags [laughs], [sighs].
+  • FIX: Output is now standard MP3 (audio/mpeg) — universally supported.
+  • REMOVED: _fix_wav_sizes (no longer needed).
+  • Version bumped to 3.4.0.
 ==============================================================================
 """
 import os
@@ -18,7 +16,6 @@ import json
 import time
 import uuid
 import re
-import struct
 import base64
 import logging
 import asyncio
@@ -53,8 +50,12 @@ GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
 GROQ_API_BASE      = os.getenv("GROQ_API_BASE", "https://api.groq.com/openai/v1")
 GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
 GROQ_QWEN_MODEL    = os.getenv("GROQ_QWEN_MODEL", "qwen/qwen3.8-27b")
-GROQ_TTS_MODEL     = os.getenv("GROQ_TTS_MODEL", "canopylabs/orpheus-arabic-saudi")
-GROQ_TTS_VOICE     = os.getenv("GROQ_TTS_VOICE", "abdullah")
+
+# ── ElevenLabs TTS ──
+ELEVENLABS_API_KEY  = os.getenv("ELEVENLABS_API_KEY", "")
+ELEVENLABS_VOICE_ID = os.getenv("ELEVENLABS_VOICE_ID", "")
+ELEVENLABS_MODEL    = os.getenv("ELEVENLABS_MODEL", "eleven_turbo_v2_5")
+ELEVENLABS_BASE     = "https://api.elevenlabs.io/v1"
 
 POLLINATIONS_API_KEY     = os.getenv("POLLINATIONS_API_KEY", "")
 POLLINATIONS_IMAGE_BASE  = "https://image.pollinations.ai"
@@ -83,19 +84,17 @@ MAX_TEXT_LENGTH     = int(os.getenv("MAX_TEXT_LENGTH", "10000"))
 CHAT_MAX_HISTORY    = int(os.getenv("CHAT_MAX_HISTORY", "20"))
 CHAT_MAX_TOKENS     = int(os.getenv("CHAT_MAX_TOKENS", "1024"))
 
-# Valid Orpheus Arabic voices on Groq (verified: all return HTTP 200)
-VALID_ARABIC_VOICES = {"abdullah", "fahad", "sultan", "lulwa", "noura", "aisha"}
-
 
 def _normalize_tts_voice(v: Optional[str]) -> str:
-    if not v:
-        return GROQ_TTS_VOICE
-    v = v.strip().lower()
-    return v if v in VALID_ARABIC_VOICES else GROQ_TTS_VOICE
+    # ElevenLabs voice IDs are long alphanumeric strings.
+    # If Qwen hallucinates a short name (like "abdullah"), we fallback to the default.
+    if v and len(v) > 10:
+        return v
+    return ELEVENLABS_VOICE_ID
 
 
 # ==============================================================================
-# Prompts
+# Prompts (Updated for ElevenLabs Voice Acting)
 # ==============================================================================
 ANALYZER_SYSTEM_PROMPT = (
     "You are a precise semantic analyzer. "
@@ -121,15 +120,17 @@ Transcript:
 JSON:"""
 
 
-CHAT_SYSTEM_PROMPT = """أنت Lordera — مساعد ذكاء اصطناعي عربي ذكي وودود ومتعدد القدرات، تشبه ChatGPT وClaude في طبيعته.
+CHAT_SYSTEM_PROMPT = """أنت Lordera — مساعد ذكاء اصطناعي عربي ذكي وودود ومتعدد القدرات.
 
 مهمتك: اقرأ المحادثة، قرر الإجراء المناسب، واكتب رداً عربياً طبيعياً.
 
 الإجراءات المتاحة:
-- "chat": محادثة عادية (افتراضي). استخدمها لأي كلام عادي، أسئلة، دردشة، تحية، سؤال عنك...
-- "image": المستخدم يطلب توليد صورة/رسم/تخيّل. يجب توفير "prompt_en" — وصف إنجليزي غني جداً (الموضوع، الأسلوب، الألوان، الإضاءة، الكاميرا). حتى لو كتب المستخدم بالعربية، الوصف يجب أن يكون إنجليزياً لأن نموذج الصور لا يفهم العربية.
-- "tts": المستخدم يطلب تحويل نص إلى كلام. توفير "text" (النص المطلوب نطقه كما هو) و"voice" (اختياري: abdullah, fahad, sultan, lulwa, noura, aisha — الافتراضي abdullah).
-- "analyze": المستخدم يطلب تحليل نص (ملخص/مشاعر/مواضيع/نية). توفير "text".
+- "chat": محادثة عادية (افتراضي). استخدمها لأي كلام عادي، أسئلة، دردشة.
+- "image": المستخدم يطلب توليد صورة. توفير "prompt_en" (وصف إنجليزي غني جداً).
+- "tts": تحويل نص إلى كلام. توفير "text" (النص المطلوب نطقه). 
+  *هام جداً للـ TTS:* أنت تستخدم الآن محرك ElevenLabs التمثيلي! يمكنك إضافة وسوم إنجليزية داخل النص العربي لتعيش الدور (مثل: [laughs]، [whispers]، [excited]، [sighs]).
+  مثال: "مرحباً! [laughs] لقد فزنا!" أو "[whispers] إنه خلفك تماماً..."
+- "analyze": تحليل نص. توفير "text".
 
 قواعد صارمة:
 1. أجب فقط بكائن JSON واحد بهذا الشكل:
@@ -139,17 +140,8 @@ CHAT_SYSTEM_PROMPT = """أنت Lordera — مساعد ذكاء اصطناعي ع
      "params": { ... }
    }
 2. "reply" دائماً بالعربية، طبيعي، دافئ، مختصر (سطر إلى ثلاثة).
-3. لا تذكر أبداً JSON أو أدوات أو نماذج أو خادم في "reply".
-4. للصور: اجعل prompt_en مفصلاً جداً بالإنجليزية (فاعل + أسلوب + إضاءة + جودة).
-5. للصوت: استخرج النص المطلوب نطقه فقط، بدون "قل:" أو "انطق:".
-6. للتحليل: استخدم النص الذي أعطاه المستخدم حرفياً في params.text.
-
-أمثلة:
-- "كيف حالك؟" → {"action":"chat","reply":"الحمد لله، بخير! كيف أقدر أساعدك اليوم؟","params":{}}
-- "ارسم لي قطة على كتاب في مكتبة قديمة" → {"action":"image","reply":"سأرسم لك هذا المشهد الآن","params":{"prompt_en":"A cute cat sitting on an old open book in a vintage wooden library, warm golden lighting, dust particles in air, cinematic photography, high detail, 4k"}}
-- "حوّل هذا النص إلى صوت: مرحباً بكم" → {"action":"tts","reply":"حسناً، سأنطق النص بصوت abdullah","params":{"text":"مرحباً بكم","voice":"abdullah"}}
-- "حلّل: المنتج ممتاز لكن الشحن بطيء" → {"action":"analyze","reply":"سأحلل لك النص الآن","params":{"text":"المنتج ممتاز لكن الشحن بطيء"}}
-- "ما هي عاصمة فرنسا؟" → {"action":"chat","reply":"عاصمة فرنسا هي باريس. هل تود معرفة شيء آخر عنها؟","params":{}}
+3. للصور: اجعل prompt_en مفصلاً جداً بالإنجليزية.
+4. للصوت: استخرج النص المطلوب نطقه فقط، وأضف وسوم التمثيل إذا كان السياق يتطلب ذلك.
 """
 
 
@@ -440,7 +432,6 @@ async def _groq_request(
 
         except httpx.HTTPStatusError as e:
             status = e.response.status_code
-            # 4xx (except 429) is a hard error - don't retry
             if 400 <= status < 500 and status != 429:
                 if breaker:
                     await breaker.record_failure()
@@ -525,68 +516,64 @@ async def _generate_image_bytes(prompt_en: str) -> Tuple[bytes, str]:
     return resp.content, ct
 
 
-def _fix_wav_sizes(data: bytes) -> bytes:
-    """
-    Groq Orpheus returns WAV with RIFF size and 'data' chunk size set to
-    0xFFFFFFFF (streaming markers). Browsers (Chrome, Safari) refuse to play
-    such files — they appear as empty or fail silently — even though the
-    audio data is real and valid.
+async def _generate_tts_bytes(text: str, voice_id: str) -> bytes:
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=503, detail="ELEVENLABS_API_KEY missing")
+    voice_id = voice_id or ELEVENLABS_VOICE_ID
+    if not voice_id:
+        raise HTTPException(status_code=503, detail="ELEVENLABS_VOICE_ID missing")
 
-    This function rewrites both header fields to their actual byte counts,
-    producing a spec-compliant WAV that every player accepts.
-
-    Reference: RFC 2361 (WAVE and AVI Codec Registries).
-    """
-    if len(data) < 44 or data[:4] != b"RIFF" or data[8:12] != b"WAVE":
-        # Not a WAV file — return unchanged (let downstream handle it).
-        return data
-
-    buf = bytearray(data)
-
-    # 1) Fix RIFF chunk size at offset 4 (= total file size - 8 bytes header)
-    struct.pack_into("<I", buf, 4, len(buf) - 8)
-
-    # 2) Walk chunks to locate 'data' and fix its size field
-    pos = 12
-    while pos + 8 <= len(buf):
-        chunk_id   = bytes(buf[pos:pos + 4])
-        chunk_size = struct.unpack_from("<I", buf, pos + 4)[0]
-        if chunk_id == b"data":
-            actual_data_size = len(buf) - pos - 8
-            struct.pack_into("<I", buf, pos + 4, actual_data_size)
-            break
-        # Advance: chunk header (8) + payload + padding if odd size
-        pos += 8 + chunk_size + (chunk_size & 1)
-
-    return bytes(buf)
-
-
-async def _generate_tts_bytes(text: str, voice: str) -> bytes:
-    # Groq Orpheus Arabic Saudi REQUIRES response_format="wav" (verified).
-    json_body = {
-        "model": GROQ_TTS_MODEL,
-        "input": text,
-        "voice": voice,
-        "response_format": "wav",
+    url = f"{ELEVENLABS_BASE}/text-to-speech/{voice_id}"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json",
+        "Accept": "audio/mpeg",
     }
-    resp = await _groq_request(
-        "POST", "/audio/speech",
-        json_body=json_body,
-        timeout=TTS_TIMEOUT, request_id="tts", breaker=tts_cb,
-    )
-    # Repair RIFF/data header sizes (Groq sets them to 0xFFFFFFFF).
-    return _fix_wav_sizes(resp.content)
+    json_body = {
+        "text": text,
+        "model_id": ELEVENLABS_MODEL,
+        "voice_settings": {
+            "stability": 0.35,          # أقل = تعبير أكثر
+            "similarity_boost": 0.75,
+            "style": 0.55,              # 0.5+ = أداء تمثيلي
+            "use_speaker_boost": True,
+        },
+    }
+
+    if tts_cb and not await tts_cb.allow():
+        raise HTTPException(status_code=503, detail="TTS circuit open")
+
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            res = await http_client.post(url, headers=headers, json=json_body, timeout=TTS_TIMEOUT)
+            if res.status_code == 200:
+                if tts_cb:
+                    await tts_cb.record_success()
+                return res.content
+            if res.status_code in (401, 403):
+                raise HTTPException(status_code=502, detail="ElevenLabs Auth Failed")
+            if res.status_code == 429:
+                await asyncio.sleep(5 * attempt)
+                continue
+            if 400 <= res.status_code < 500:
+                raise HTTPException(status_code=502, detail=f"ElevenLabs Error: {res.text[:200]}")
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.warning(f"ElevenLabs attempt {attempt} failed: {e}")
+        
+        if attempt < MAX_RETRIES:
+            await asyncio.sleep(RETRY_BACKOFF ** attempt)
+
+    if tts_cb:
+        await tts_cb.record_failure()
+    raise HTTPException(status_code=502, detail="ElevenLabs unreachable")
 
 
 # ==============================================================================
 # Chat Orchestrator
 # ==============================================================================
 async def orchestrate_chat(messages: List[Dict[str, str]], request_id: str) -> Dict[str, Any]:
-    """
-    Sends the conversation to Qwen, gets a JSON decision, executes the action,
-    returns {reply, action, media_base64?, media_content_type?, analysis?}.
-    """
-    # Trim history
     trimmed = messages[-CHAT_MAX_HISTORY:] if len(messages) > CHAT_MAX_HISTORY else messages
 
     qwen_messages = [{"role": "system", "content": CHAT_SYSTEM_PROMPT}]
@@ -620,7 +607,6 @@ async def orchestrate_chat(messages: List[Dict[str, str]], request_id: str) -> D
     reply = decision.get("reply")
     params = decision.get("params") or {}
 
-    # If Qwen returned plain text (no JSON), treat as chat reply
     if action not in ("chat", "image", "tts", "analyze"):
         fallback = decision.get("raw_analysis") or reply or str(raw)[:2000]
         return {"reply": fallback.strip() or "عذراً، لم أفهم طلبك.", "action": "chat"}
@@ -632,7 +618,6 @@ async def orchestrate_chat(messages: List[Dict[str, str]], request_id: str) -> D
     if action == "image":
         prompt_en = (params.get("prompt_en") or "").strip()
         if not prompt_en:
-            # Fallback: use raw user text as English prompt
             prompt_en = trimmed[-1].get("content", "") if trimmed else ""
         if not prompt_en:
             return {"reply": reply + "\n\n⚠️ لم أستطع تحديد وصف الصورة.", "action": "chat"}
@@ -666,8 +651,8 @@ async def orchestrate_chat(messages: List[Dict[str, str]], request_id: str) -> D
             return {
                 "reply": reply,
                 "action": "tts",
-                "media_base64": f"data:audio/wav;base64,{b64}",
-                "media_content_type": "audio/wav",
+                "media_base64": f"data:audio/mpeg;base64,{b64}",
+                "media_content_type": "audio/mpeg",
             }
         except Exception as e:
             logger.error(f"[{request_id}] Chat TTS failed: {e}")
@@ -806,13 +791,14 @@ async def lifespan(app: FastAPI):
     global worker_task, cleanup_task, rate_cleanup_task
 
     logger.info("=" * 70)
-    logger.info("Lordera Gateway v3.3.2 starting (Smart Chat + Groq TTS + Pollinations)")
+    logger.info("Lordera Gateway v3.4.0 starting (Smart Chat + ElevenLabs TTS)")
     logger.info(f"Groq base:        {GROQ_API_BASE}")
     logger.info(f"Whisper:          {GROQ_WHISPER_MODEL}")
     logger.info(f"Qwen (chat):      {GROQ_QWEN_MODEL}")
-    logger.info(f"TTS:              {GROQ_TTS_MODEL} / {GROQ_TTS_VOICE}")
+    logger.info(f"ElevenLabs Voice: {ELEVENLABS_VOICE_ID or '✗ MISSING'}")
     logger.info(f"Image:            {POLLINATIONS_IMAGE_MODEL}")
     logger.info(f"Groq key:         {'✓' if GROQ_API_KEY else '✗ MISSING'}")
+    logger.info(f"ElevenLabs key:   {'✓' if ELEVENLABS_API_KEY else '✗ MISSING'}")
     logger.info(f"Pollinations key: {'✓' if POLLINATIONS_API_KEY else '✗ not set'}")
     logger.info(f"Queue:            max={MAX_QUEUE_SIZE}, reject@{REJECT_THRESHOLD*100:.0f}%")
     logger.info(f"Rate limit:       {RATE_LIMIT_MAX} req / {RATE_LIMIT_WINDOW}s per IP")
@@ -828,7 +814,7 @@ async def lifespan(app: FastAPI):
     rate_limiter = RateLimiter(window=RATE_LIMIT_WINDOW, max_requests=RATE_LIMIT_MAX)
     whisper_cb   = CircuitBreaker("groq-whisper")
     qwen_cb      = CircuitBreaker("groq-qwen")
-    tts_cb       = CircuitBreaker("groq-tts")
+    tts_cb       = CircuitBreaker("elevenlabs-tts")
 
     worker_task       = asyncio.create_task(worker_loop())
     cleanup_task      = asyncio.create_task(job_store.cleanup_loop())
@@ -851,8 +837,8 @@ async def lifespan(app: FastAPI):
 # ==============================================================================
 app = FastAPI(
     title="Lordera AI Gateway",
-    description="Smart chat orchestrator using Groq (Qwen/Whisper/TTS) + Pollinations.",
-    version="3.3.2",
+    description="Smart chat orchestrator using Groq (Qwen/Whisper) + ElevenLabs TTS + Pollinations.",
+    version="3.4.0",
     lifespan=lifespan,
 )
 
@@ -918,11 +904,11 @@ class HealthResponse(BaseModel):
     status: str
     version: str
     groq_api_configured: bool
+    elevenlabs_api_configured: bool
     pollinations_api_configured: bool
     groq_whisper_model: str
     groq_qwen_model: str
-    groq_tts_model: str
-    groq_tts_voice: str
+    elevenlabs_voice_id: str
     image_model: str
     whisper_circuit_open: bool
     qwen_circuit_open: bool
@@ -940,8 +926,8 @@ class HealthResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera AI Gateway",
-        "version": "3.3.2",
-        "backend": "Groq + Pollinations",
+        "version": "3.4.0",
+        "backend": "Groq + ElevenLabs + Pollinations",
         "endpoints": {
             "chat":        "POST /chat",
             "transcribe":  "POST /transcribe",
@@ -961,14 +947,14 @@ async def root():
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     return HealthResponse(
-        status="healthy" if GROQ_API_KEY else "degraded",
-        version="3.3.2",
+        status="healthy" if GROQ_API_KEY and ELEVENLABS_API_KEY else "degraded",
+        version="3.4.0",
         groq_api_configured=bool(GROQ_API_KEY),
+        elevenlabs_api_configured=bool(ELEVENLABS_API_KEY),
         pollinations_api_configured=bool(POLLINATIONS_API_KEY),
         groq_whisper_model=GROQ_WHISPER_MODEL,
         groq_qwen_model=GROQ_QWEN_MODEL,
-        groq_tts_model=GROQ_TTS_MODEL,
-        groq_tts_voice=GROQ_TTS_VOICE,
+        elevenlabs_voice_id=ELEVENLABS_VOICE_ID,
         image_model=POLLINATIONS_IMAGE_MODEL,
         whisper_circuit_open=whisper_cb.is_open(),
         qwen_circuit_open=qwen_cb.is_open(),
@@ -993,7 +979,6 @@ async def chat_endpoint(request: Request, body: ChatRequest):
     if not body.messages:
         raise HTTPException(status_code=400, detail="messages array is empty")
 
-    # Validate roles
     for m in body.messages:
         if m.role not in ("user", "assistant", "system"):
             raise HTTPException(status_code=400, detail=f"Invalid role: {m.role}")
@@ -1050,8 +1035,8 @@ async def transcribe_endpoint(request: Request, file: UploadFile = File(...)):
 # ------------------- Direct TTS -------------------
 @app.post("/tts")
 async def tts_endpoint(req: TTSRequest):
-    if not GROQ_API_KEY:
-        raise HTTPException(status_code=503, detail="GROQ_API_KEY not configured")
+    if not ELEVENLABS_API_KEY:
+        raise HTTPException(status_code=503, detail="ELEVENLABS_API_KEY not configured")
     text = (req.text or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="text is required")
@@ -1062,7 +1047,7 @@ async def tts_endpoint(req: TTSRequest):
     try:
         audio = await _generate_tts_bytes(text, voice)
         metrics["total_tts"] += 1
-        return Response(content=audio, media_type="audio/wav")
+        return Response(content=audio, media_type="audio/mpeg")
     except HTTPException:
         raise
     except Exception as e:
