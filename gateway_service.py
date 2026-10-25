@@ -1,17 +1,16 @@
 """
 ==============================================================================
-Lordera AI — Gateway Service v3.1.4 (Production Ready)
+Lordera AI — Gateway Service v3.2.0 (Groq TTS Arabic + Pollinations Images)
 ==============================================================================
-CHANGELOG v3.1.3 → v3.1.4:
-  • TTS now uses the official OpenAI-compatible endpoint at
-    https://gen.pollinations.ai/v1/audio/speech (POST) as primary,
-    with GET /audio/{text} as fallback. API key is passed in headers.
-  • Image generation now passes the key in BOTH the Authorization header
-    and the &key= query parameter to bypass the 45s free-tier limit.
-  • Added enhance=true to image URL for better quality.
-  • Image model is configurable via POLLINATIONS_IMAGE_MODEL (default: flux).
-  • Health check reports pollinations_api_configured.
-  • Version bumped to 3.1.4.
+CHANGELOG v3.1.4 → v3.2.0:
+  • CRITICAL UPDATE: Switched TTS completely to Groq API using the Orpheus
+    Arabic Saudi model (canopylabs/orpheus-arabic-saudi) for natural Arabic
+    pronunciation and ultra-low latency.
+  • Added GROQ_TTS_MODEL and GROQ_TTS_VOICE environment variables.
+  • Removed all Pollinations TTS logic and variables.
+  • Pollinations remains strictly for image generation.
+  • Added CircuitBreaker for TTS.
+  • Version bumped to 3.2.0.
 ==============================================================================
 """
 import os
@@ -22,7 +21,6 @@ import re
 import logging
 import asyncio
 import urllib.parse
-import base64
 from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any, Deque
 from dataclasses import dataclass, field
@@ -53,10 +51,11 @@ GROQ_API_KEY       = os.getenv("GROQ_API_KEY", "")
 GROQ_API_BASE      = os.getenv("GROQ_API_BASE", "https://api.groq.com/openai/v1")
 GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
 GROQ_QWEN_MODEL    = os.getenv("GROQ_QWEN_MODEL", "qwen/qwen3.8-27b")
+GROQ_TTS_MODEL     = os.getenv("GROQ_TTS_MODEL", "canopylabs/orpheus-arabic-saudi")
+GROQ_TTS_VOICE     = os.getenv("GROQ_TTS_VOICE", "abdullah")
 
-# Pollinations.ai
+# Pollinations.ai (Images ONLY)
 POLLINATIONS_API_KEY     = os.getenv("POLLINATIONS_API_KEY", "")
-POLLINATIONS_TTS_BASE    = "https://gen.pollinations.ai"
 POLLINATIONS_IMAGE_BASE  = "https://image.pollinations.ai"
 POLLINATIONS_IMAGE_MODEL = os.getenv("POLLINATIONS_IMAGE_MODEL", "flux")
 
@@ -290,6 +289,7 @@ job_store:    Optional[JobStore] = None
 rate_limiter: Optional[RateLimiter] = None
 whisper_cb:   Optional[CircuitBreaker] = None
 qwen_cb:      Optional[CircuitBreaker] = None
+tts_cb:       Optional[CircuitBreaker] = None
 
 worker_task:       Optional[asyncio.Task] = None
 cleanup_task:      Optional[asyncio.Task] = None
@@ -629,16 +629,18 @@ def estimate_wait_seconds() -> float:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global http_client, job_queue, job_store, rate_limiter
-    global whisper_cb, qwen_cb
+    global whisper_cb, qwen_cb, tts_cb
     global worker_task, cleanup_task, rate_cleanup_task
 
     logger.info("=" * 70)
-    logger.info("Lordera Gateway v3.1.4 starting (Groq + Pollinations)")
+    logger.info("Lordera Gateway v3.2.0 starting (Groq TTS + Pollinations Images)")
     logger.info(f"Groq API base:    {GROQ_API_BASE}")
     logger.info(f"Whisper model:    {GROQ_WHISPER_MODEL}")
     logger.info(f"Qwen model:       {GROQ_QWEN_MODEL}")
+    logger.info(f"TTS model:        {GROQ_TTS_MODEL}")
+    logger.info(f"TTS voice:        {GROQ_TTS_VOICE}")
     logger.info(f"Groq key:         {'configured' if GROQ_API_KEY else 'MISSING!'}")
-    logger.info(f"Pollinations key: {'configured' if POLLINATIONS_API_KEY else 'not set (using free tier)'}")
+    logger.info(f"Pollinations key: {'configured' if POLLINATIONS_API_KEY else 'not set (images rate-limited)'}")
     logger.info(f"Image model:      {POLLINATIONS_IMAGE_MODEL}")
     logger.info(f"Queue:            max={MAX_QUEUE_SIZE}, reject@{REJECT_THRESHOLD*100:.0f}%")
     logger.info(f"Rate limit:       {RATE_LIMIT_MAX} req / {RATE_LIMIT_WINDOW}s per IP")
@@ -648,7 +650,7 @@ async def lifespan(app: FastAPI):
     if not GROQ_API_KEY:
         logger.error("GROQ_API_KEY is not set. All Groq AI calls will fail with 503.")
     if not POLLINATIONS_API_KEY:
-        logger.warning("POLLINATIONS_API_KEY is not set. Image/TTS will be rate-limited.")
+        logger.warning("POLLINATIONS_API_KEY is not set. Image generation will be rate-limited.")
 
     http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(WHISPER_TIMEOUT, connect=10.0),
@@ -659,6 +661,7 @@ async def lifespan(app: FastAPI):
     rate_limiter = RateLimiter(window=RATE_LIMIT_WINDOW, max_requests=RATE_LIMIT_MAX)
     whisper_cb   = CircuitBreaker("groq-whisper")
     qwen_cb      = CircuitBreaker("groq-qwen")
+    tts_cb       = CircuitBreaker("groq-tts")
 
     worker_task       = asyncio.create_task(worker_loop())
     cleanup_task      = asyncio.create_task(job_store.cleanup_loop())
@@ -684,7 +687,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera AI Gateway",
     description="Async job-based orchestrator using Groq API + Pollinations.ai.",
-    version="3.1.4",
+    version="3.2.0",
     lifespan=lifespan,
 )
 
@@ -728,9 +731,11 @@ class HealthResponse(BaseModel):
     pollinations_api_configured: bool
     groq_whisper_model: str
     groq_qwen_model: str
+    groq_tts_model: str
     image_model: str
     whisper_circuit_open: bool
     qwen_circuit_open: bool
+    tts_circuit_open: bool
     queue_size: int
     queue_max: int
     worker_running: bool
@@ -742,7 +747,7 @@ class TextJobSubmitRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str
-    voice: str = "nova"
+    voice: Optional[str] = None
 
 class ImageRequest(BaseModel):
     prompt: str
@@ -755,7 +760,7 @@ class ImageRequest(BaseModel):
 async def root():
     return {
         "service": "Lordera AI Gateway",
-        "version": "3.1.4",
+        "version": "3.2.0",
         "backend": "Groq + Pollinations",
         "endpoints": {
             "submit_audio": "POST /jobs",
@@ -782,9 +787,11 @@ async def health_check():
         pollinations_api_configured=pollinations_ok,
         groq_whisper_model=GROQ_WHISPER_MODEL,
         groq_qwen_model=GROQ_QWEN_MODEL,
+        groq_tts_model=GROQ_TTS_MODEL,
         image_model=POLLINATIONS_IMAGE_MODEL,
         whisper_circuit_open=whisper_cb.is_open(),
         qwen_circuit_open=qwen_cb.is_open(),
+        tts_circuit_open=tts_cb.is_open(),
         queue_size=job_queue.qsize(),
         queue_max=MAX_QUEUE_SIZE,
         worker_running=worker_task is not None and not worker_task.done(),
@@ -812,8 +819,10 @@ async def queue_status():
         "total_cancelled":  metrics["total_cancelled"],
         "whisper_circuit_open": whisper_cb.is_open(),
         "qwen_circuit_open":    qwen_cb.is_open(),
+        "tts_circuit_open":     tts_cb.is_open(),
         "groq_whisper_model": GROQ_WHISPER_MODEL,
         "groq_qwen_model":    GROQ_QWEN_MODEL,
+        "groq_tts_model":     GROQ_TTS_MODEL,
         "image_model":        POLLINATIONS_IMAGE_MODEL,
         "groq_api_configured": bool(GROQ_API_KEY),
         "pollinations_api_configured": bool(POLLINATIONS_API_KEY),
@@ -1001,64 +1010,41 @@ async def cancel_job(job_id: str):
     return {"status": "cancelled", "job_id": job_id}
 
 
-# --------------- Pollinations.ai: TTS & Image -----------------
+# --------------- Groq TTS ---------------
 @app.post("/tts")
 async def generate_tts(req: TTSRequest):
     """
-    Generates audio from text using the official Pollinations OpenAI-compatible endpoint.
-    The key is passed via the Authorization header to bypass rate limits.
+    Generates audio from text using Groq's TTS API.
     """
-    # المسار الأول: POST /v1/audio/speech (المتوافق مع OpenAI)
-    url = f"{POLLINATIONS_TTS_BASE}/v1/audio/speech"
-    headers = {
-        "Content-Type": "application/json",
-        "Authorization": f"Bearer {POLLINATIONS_API_KEY}" if POLLINATIONS_API_KEY else "",
-    }
-    payload = {
-        "model": "openai-audio",
+    if not GROQ_API_KEY:
+        raise HTTPException(status_code=503, detail="GROQ_API_KEY is not configured.")
+
+    voice = req.voice or GROQ_TTS_VOICE
+
+    json_body = {
+        "model": GROQ_TTS_MODEL,
         "input": req.text,
-        "voice": req.voice,
-        "response_format": "mp3",
+        "voice": voice,
+        "response_format": "mp3"
     }
 
     try:
-        resp = await http_client.post(url, json=payload, headers=headers, timeout=TTS_TIMEOUT)
-
-        # المسار الثاني: GET /audio/{text} (الاحتياطي)
-        if resp.status_code != 200:
-            logger.warning(f"POST TTS failed ({resp.status_code}), trying GET /audio/{{text}}")
-            encoded_text = urllib.parse.quote(req.text)
-            get_url = f"{POLLINATIONS_TTS_BASE}/audio/{encoded_text}?voice={req.voice}"
-            if POLLINATIONS_API_KEY:
-                get_url += f"&key={POLLINATIONS_API_KEY}"
-            resp = await http_client.get(get_url, headers=headers, timeout=TTS_TIMEOUT)
-
-        resp.raise_for_status()
-
-        # التحقق من أن الرد صوت وليس JSON خطأ
-        content_type = resp.headers.get("content-type", "")
-        if "application/json" in content_type:
-            error_data = resp.json()
-            raise HTTPException(status_code=502, detail=f"Pollinations TTS error: {error_data}")
-
-        return Response(content=resp.content, media_type="audio/mpeg")
-
-    except httpx.HTTPStatusError as e:
-        logger.error(f"Pollinations TTS HTTP {e.response.status_code}: {e.response.text[:300]}")
-        raise HTTPException(
-            status_code=502,
-            detail=f"TTS generation failed: {e.response.text[:300]}",
+        response = await _groq_request(
+            "POST",
+            "/audio/speech",
+            json_body=json_body,
+            timeout=TTS_TIMEOUT,
+            breaker=tts_cb,
         )
+        return Response(content=response.content, media_type="audio/mpeg")
     except HTTPException:
         raise
     except Exception as e:
-        logger.exception("TTS generation error")
-        raise HTTPException(
-            status_code=502,
-            detail=f"TTS generation error: {type(e).__name__}: {str(e)[:200]}",
-        )
+        logger.error(f"Groq TTS error: {e}")
+        raise HTTPException(status_code=502, detail=f"TTS generation failed: {type(e).__name__}")
 
 
+# --------------- Pollinations.ai: Image ---------------
 @app.post("/image")
 async def generate_image(req: ImageRequest):
     """Generates an image from a prompt using Pollinations.ai."""
@@ -1070,7 +1056,6 @@ async def generate_image(req: ImageRequest):
         f"&nologo=true"
         f"&enhance=true"
     )
-    # تمرير المفتاح في الرابط لضمان قبوله
     if POLLINATIONS_API_KEY:
         url += f"&key={POLLINATIONS_API_KEY}"
 

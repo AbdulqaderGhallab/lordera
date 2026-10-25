@@ -3,13 +3,16 @@ version: "2.0"
 
 services:
   gateway:
-    image: abdulqaderghallab/lordera-gateway:v12
+    image: abdulqaderghallab/lordera-gateway:v13
     env:
-      # ── Groq API (Whisper + Qwen) ────────────────────────────────────
+      # ── Groq API ─────────────────────────────────────────────────────
       - "GROQ_API_KEY=xxx"
       - "GROQ_WHISPER_MODEL=whisper-large-v3"
       - "GROQ_QWEN_MODEL=qwen/qwen3.8-27b"
-      # ── Pollinations.ai (TTS + Image) ────────────────────────────────
+      # ── Groq TTS (Orpheus Arabic) ────────────────────────────────────
+      - "GROQ_TTS_MODEL=canopylabs/orpheus-arabic-saudi"
+      - "GROQ_TTS_VOICE=abdullah"
+      # ── Pollinations.ai (Images ONLY) ────────────────────────────────
       - "POLLINATIONS_API_KEY=xxx"
       - "POLLINATIONS_IMAGE_MODEL=flux"
       # ── Queue & Rate limiting ─────────────────────────────────────────
