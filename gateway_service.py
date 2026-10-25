@@ -3,9 +3,9 @@
 Lordera AI — Gateway Service v3.5.1
 Smart Chat Orchestrator + Edge-TTS (Free Arabic Voices)
 ==============================================================================
-CHANGELOG v3.5.0 → v3.5.1:
-  • FIX: CORS configuration (allow_credentials=False) to allow browser clients
-    to communicate with the API without being blocked by CORS policy.
+CHANGELOG v3.4.0 → v3.5.1:
+  • MAJOR: Replaced ElevenLabs with Microsoft Edge-TTS (free, no API key).
+  • FIX: CORS (allow_credentials=False) to allow browser clients.
   • Version bumped to 3.5.1.
 ==============================================================================
 """
@@ -559,7 +559,7 @@ async def lifespan(app: FastAPI):
 # ==============================================================================
 app = FastAPI(title="Lordera AI Gateway", version="3.5.1", lifespan=lifespan)
 
-# ⬇️ إصلاح CORS: تم تغيير allow_credentials إلى False
+# ⬇️ إصلاح CORS للواجهة
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],

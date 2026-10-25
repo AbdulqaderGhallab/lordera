@@ -27,7 +27,7 @@ jobs:
             PORT=8000
           push: true
           tags: |
-            abdulqaderghallab/lordera-gateway:v18
+            abdulqaderghallab/lordera-gateway:v19
             abdulqaderghallab/lordera-gateway:latest
           cache-from: type=gha
           cache-to: type=gha,mode=max
