@@ -1,14 +1,12 @@
 """
 ==============================================================================
-Lordera AI — Gateway Service v3.5.0
+Lordera AI — Gateway Service v3.5.1
 Smart Chat Orchestrator + Edge-TTS (Free Arabic Voices)
 ==============================================================================
-CHANGELOG v3.4.0 → v3.5.0:
-  • MAJOR: Replaced ElevenLabs with Microsoft Edge-TTS (free, no API key).
-  • NEW: Arabic voices (Hamed, Zariyah, Salma, Shakir) available by default.
-  • FIX: Output is standard MP3 (audio/mpeg) — universally supported.
-  • REMOVED: All ElevenLabs configurations and dependencies.
-  • Version bumped to 3.5.0.
+CHANGELOG v3.5.0 → v3.5.1:
+  • FIX: CORS configuration (allow_credentials=False) to allow browser clients
+    to communicate with the API without being blocked by CORS policy.
+  • Version bumped to 3.5.1.
 ==============================================================================
 """
 import os
@@ -92,7 +90,6 @@ def _normalize_tts_voice(v: Optional[str]) -> str:
     v_lower = v.lower()
     if v_lower in EDGE_VOICES:
         return EDGE_VOICES[v_lower]
-    # If it's already a full Microsoft voice name (e.g., ar-SA-HamedNeural), keep it
     if "-Neural" in v:
         return v
     return EDGE_VOICES["hamed"]
@@ -560,8 +557,16 @@ async def lifespan(app: FastAPI):
 # ==============================================================================
 # FastAPI App & Endpoints
 # ==============================================================================
-app = FastAPI(title="Lordera AI Gateway", version="3.5.0", lifespan=lifespan)
-app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+app = FastAPI(title="Lordera AI Gateway", version="3.5.1", lifespan=lifespan)
+
+# ⬇️ إصلاح CORS: تم تغيير allow_credentials إلى False
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class ChatMessage(BaseModel): role: str; content: str
 class ChatRequest(BaseModel): messages: List[ChatMessage]
@@ -572,7 +577,7 @@ class ImageRequest(BaseModel): prompt: str
 async def health_check():
     return {
         "status": "healthy" if GROQ_API_KEY else "degraded",
-        "version": "3.5.0",
+        "version": "3.5.1",
         "tts_engine": "Edge-TTS (Free)",
         "groq_configured": bool(GROQ_API_KEY)
     }
