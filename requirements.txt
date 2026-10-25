@@ -1,7 +1,7 @@
 # ==============================================================================
-# Lordera Gateway — Dependencies (Groq API backend, v3.0.0)
+# Lordera Gateway — Dependencies (Groq + Pollinations, v3.1.0)
 # ==============================================================================
-# No GPU, no blockchain, no controller — Groq handles all AI inference.
+# No GPU, no blockchain, no controller — Groq and Pollinations handle AI.
 # ==============================================================================
 
 # Core web & API

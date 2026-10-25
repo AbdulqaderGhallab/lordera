@@ -3,12 +3,14 @@ version: "2.0"
 
 services:
   gateway:
-    image: abdulqaderghallab/lordera-gateway:v7
+    image: abdulqaderghallab/lordera-gateway:v8
     env:
-      # ── Groq API ──────────────────────────────────────────────────────
-      - "GROQ_API_KEY=gsk_REPLACE_WITH_YOUR_KEY"
+      # ── Groq API (Whisper + Qwen) ────────────────────────────────────
+      - "GROQ_API_KEY=xxxxxx"
       - "GROQ_WHISPER_MODEL=whisper-large-v3"
       - "GROQ_QWEN_MODEL=qwen/qwen3.8-27b"
+      # ── Pollinations.ai (TTS + Image) ────────────────────────────────
+      - "POLLINATIONS_API_KEY=xxxxxx"
       # ── Queue & Rate limiting ─────────────────────────────────────────
       - "MAX_QUEUE_SIZE=50"
       - "REJECT_THRESHOLD=0.9"
@@ -17,10 +19,12 @@ services:
       - "MAX_JOBS_IN_STORE=1000"
       - "RATE_LIMIT_WINDOW=60.0"
       - "RATE_LIMIT_MAX=10"
-      # ── Upload & timeouts (Groq Whisper limit = 25MB) ────────────────
+      # ── Upload & timeouts ────────────────────────────────────────────
       - "MAX_UPLOAD_SIZE=26214400"
       - "WHISPER_TIMEOUT=120.0"
       - "QWEN_TIMEOUT=60.0"
+      - "TTS_TIMEOUT=60.0"
+      - "IMAGE_TIMEOUT=120.0"
       - "LEGACY_WAIT_TIMEOUT=120.0"
       - "MAX_RETRIES=3"
       - "RETRY_BACKOFF=2.0"

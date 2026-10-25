@@ -69,17 +69,20 @@
             border-radius: 8px;
             padding: 4px;
             margin-bottom: 20px;
+            flex-wrap: wrap; /* Allow wrapping on small screens */
         }
 
         .tab {
             flex: 1;
             text-align: center;
-            padding: 10px;
+            padding: 10px 5px;
             cursor: pointer;
             border-radius: 6px;
             color: var(--text-muted);
             font-weight: bold;
+            font-size: 13px;
             transition: all 0.3s ease;
+            min-width: 100px;
         }
 
         .tab.active {
@@ -114,19 +117,22 @@
             color: var(--text-muted);
         }
 
-        textarea {
+        textarea, select {
             width: 100%;
-            height: 120px;
             background-color: var(--bg);
             border: 1px solid var(--border);
             border-radius: 8px;
             padding: 12px;
             color: var(--text);
-            resize: none;
             font-size: 14px;
         }
 
-        textarea:focus {
+        textarea {
+            height: 120px;
+            resize: none;
+        }
+
+        textarea:focus, select:focus {
             outline: none;
             border-color: var(--primary);
         }
@@ -203,11 +209,6 @@
             font-size: 14px;
         }
 
-        .status-box .highlight {
-            color: var(--primary);
-            font-weight: bold;
-        }
-
         .spinner {
             border: 3px solid rgba(255, 255, 255, 0.1);
             width: 30px;
@@ -238,10 +239,37 @@
             line-height: 1.5;
             border: 1px solid var(--border);
         }
+
+        .media-container {
+            background-color: #0b1120;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            text-align: center;
+        }
+
+        audio {
+            width: 100%;
+            margin-bottom: 10px;
+        }
+
+        img.generated-image {
+            max-width: 100%;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            margin-bottom: 10px;
+        }
         
         .error-text {
             color: var(--danger);
             font-weight: bold;
+        }
+
+        .note {
+            font-size: 12px;
+            color: var(--text-muted);
+            margin-top: -5px;
+            margin-bottom: 10px;
         }
     </style>
 </head>
@@ -250,13 +278,15 @@
     <div class="container">
         <div class="header">
             <h1>Lordera AI</h1>
-            <p>واجهة اختبار النظام (Whisper + Qwen)</p>
+            <p>واجهة اختبار النظام (Groq + Pollinations)</p>
         </div>
 
         <!-- Tabs -->
         <div class="tabs">
-            <div class="tab active" onclick="switchTab('audio')">🎵 إرسال صوت</div>
-            <div class="tab" onclick="switchTab('text')">📝 إرسال نص</div>
+            <div class="tab active" onclick="switchTab('audio')">🎵 صوت إلى نص</div>
+            <div class="tab" onclick="switchTab('text')">📝 تحليل نص</div>
+            <div class="tab" onclick="switchTab('tts')">🎙️ نص إلى صوت</div>
+            <div class="tab" onclick="switchTab('image')">🎨 نص إلى صورة</div>
         </div>
 
         <!-- Audio Tab -->
@@ -281,6 +311,36 @@
             <button id="btnText" class="btn btn-primary" onclick="submitText()">بدء المعالجة (تحليل فقط)</button>
         </div>
 
+        <!-- TTS Tab -->
+        <div id="tab-tts" class="tab-content">
+            <div class="input-group">
+                <label>أدخل النص لتحويله إلى صوت (يدعم الإنجليزية حالياً)</label>
+                <div class="note">ملاحظة: نموذج Pollinations الحالي يدعم اللغة الإنجليزية فقط.</div>
+                <textarea id="ttsInput" placeholder="Hello world, this is a test..."></textarea>
+            </div>
+            <div class="input-group">
+                <label>اختر الصوت</label>
+                <select id="ttsVoice">
+                    <option value="nova">Nova (أنثوي دافئ)</option>
+                    <option value="alloy">Alloy (محايد)</option>
+                    <option value="echo">Echo (ذكوري)</option>
+                    <option value="fable">Fable (بريطاني)</option>
+                    <option value="onyx">Onyx (عميق)</option>
+                    <option value="shimmer">Shimmer (ناعم)</option>
+                </select>
+            </div>
+            <button id="btnTTS" class="btn btn-primary" onclick="submitTTS()">توليد الصوت</button>
+        </div>
+
+        <!-- Image Tab -->
+        <div id="tab-image" class="tab-content">
+            <div class="input-group">
+                <label>أدخل وصف الصورة (Prompt)</label>
+                <textarea id="imageInput" placeholder="A futuristic city with flying cars, cyberpunk style, highly detailed, 8k..."></textarea>
+            </div>
+            <button id="btnImage" class="btn btn-primary" onclick="submitImage()">توليد الصورة</button>
+        </div>
+
         <!-- Status Box -->
         <div id="statusBox" class="status-box">
             <div class="spinner" id="spinner"></div>
@@ -288,31 +348,56 @@
             <p id="queueText"></p>
         </div>
 
-        <!-- Result Box -->
+        <!-- Result Box (for Text/Audio Analysis) -->
         <div id="resultBox" class="result-box">
             <pre id="jsonResult"></pre>
             <button id="btnDownload" class="btn btn-download" onclick="downloadJSON()">⬇️ تحميل النتيجة (JSON)</button>
         </div>
+
+        <!-- Result Box (for TTS) -->
+        <div id="ttsResultBox" class="result-box">
+            <div class="media-container">
+                <audio id="ttsAudio" controls></audio>
+                <br>
+                <button id="btnDownloadTTS" class="btn btn-download" onclick="downloadMedia('ttsAudio', 'lordera_speech.mp3')">⬇️ تحميل الصوت (MP3)</button>
+            </div>
+        </div>
+
+        <!-- Result Box (for Image) -->
+        <div id="imageResultBox" class="result-box">
+            <div class="media-container">
+                <img id="generatedImage" class="generated-image" alt="Generated Image">
+                <br>
+                <button id="btnDownloadImage" class="btn btn-download" onclick="downloadMedia('generatedImage', 'lordera_image.jpg')">⬇️ تحميل الصورة (JPG)</button>
+            </div>
+        </div>
     </div>
 
     <script>
-        // ⚠️ تم تحديث الرابط الجديد هنا بناءً على النشر الجديد
-        const GATEWAY_URL = "http://3abop40obtch5e3o4if0lb724s.ingress.akash.rhite.co.uk";
+        // ⚠️ الرابط الجديد بعد النشر على Akash (v8)
+        const GATEWAY_URL = "http://ehrdtp1td1e73flsodd94ka5b8.ingress.akash.rhite.co.uk";
         
         let currentJobId = null;
         let currentResult = null;
         let pollInterval = null;
 
-        function switchTab(tab) {
+        function switchTab(tabName) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
             
-            if (tab === 'audio') {
-                document.querySelectorAll('.tab')[0].classList.add('active');
+            const tabs = document.querySelectorAll('.tab');
+            if (tabName === 'audio') {
+                tabs[0].classList.add('active');
                 document.getElementById('tab-audio').classList.add('active');
-            } else {
-                document.querySelectorAll('.tab')[1].classList.add('active');
+            } else if (tabName === 'text') {
+                tabs[1].classList.add('active');
                 document.getElementById('tab-text').classList.add('active');
+            } else if (tabName === 'tts') {
+                tabs[2].classList.add('active');
+                document.getElementById('tab-tts').classList.add('active');
+            } else if (tabName === 'image') {
+                tabs[3].classList.add('active');
+                document.getElementById('tab-image').classList.add('active');
             }
             resetUI();
         }
@@ -327,9 +412,19 @@
         function resetUI() {
             document.getElementById('statusBox').style.display = 'none';
             document.getElementById('resultBox').style.display = 'none';
+            document.getElementById('ttsResultBox').style.display = 'none';
+            document.getElementById('imageResultBox').style.display = 'none';
+            
             document.getElementById('btnDownload').style.display = 'none';
+            document.getElementById('btnDownloadTTS').style.display = 'none';
+            document.getElementById('btnDownloadImage').style.display = 'none';
+            
             document.getElementById('btnAudio').disabled = false;
             document.getElementById('btnText').disabled = false;
+            document.getElementById('btnTTS').disabled = false;
+            document.getElementById('btnImage').disabled = false;
+            
+            document.getElementById('spinner').style.display = 'block';
             if (pollInterval) clearInterval(pollInterval);
             currentResult = null;
         }
@@ -339,6 +434,10 @@
             document.getElementById('statusText').textContent = msg;
             document.getElementById('queueText').textContent = queueMsg;
         }
+
+        // ==========================================
+        // 1. Audio / Text Analysis (Groq)
+        // ==========================================
 
         async function submitAudio() {
             const fileInput = document.getElementById('audioFile');
@@ -423,7 +522,7 @@
                     clearInterval(pollInterval);
                     showError("فقدان الاتصال بالبوابة");
                 }
-            }, 3000); // فحص كل 3 ثواني
+            }, 3000);
         }
 
         function showResult(data) {
@@ -432,7 +531,6 @@
             document.getElementById('btnAudio').disabled = false;
             document.getElementById('btnText').disabled = false;
 
-            // تجهيز النتيجة
             currentResult = {
                 job_id: data.job_id,
                 transcript: data.transcript,
@@ -440,17 +538,115 @@
                 processed_at: new Date().toISOString()
             };
 
-            // عرض النتيجة في الشاشة
             document.getElementById('resultBox').style.display = 'block';
             document.getElementById('jsonResult').textContent = JSON.stringify(currentResult, null, 4);
             document.getElementById('btnDownload').style.display = 'block';
         }
+
+        // ==========================================
+        // 2. Text-to-Speech (Pollinations)
+        // ==========================================
+
+        async function submitTTS() {
+            const text = document.getElementById('ttsInput').value.trim();
+            const voice = document.getElementById('ttsVoice').value;
+            
+            if (!text) {
+                alert("الرجاء إدخال النص أولاً");
+                return;
+            }
+
+            resetUI();
+            document.getElementById('btnTTS').disabled = true;
+            showStatus("جاري توليد الصوت... (قد يستغرق بضع ثوانٍ)");
+
+            try {
+                const response = await fetch(`${GATEWAY_URL}/tts`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ text: text, voice: voice })
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || "فشل توليد الصوت");
+                }
+
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                
+                const audioEl = document.getElementById('ttsAudio');
+                audioEl.src = url;
+                
+                document.getElementById('spinner').style.display = 'none';
+                showStatus("✅ تم توليد الصوت بنجاح");
+                document.getElementById('ttsResultBox').style.display = 'block';
+                document.getElementById('btnDownloadTTS').style.display = 'block';
+
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                document.getElementById('btnTTS').disabled = false;
+            }
+        }
+
+        // ==========================================
+        // 3. Text-to-Image (Pollinations)
+        // ==========================================
+
+        async function submitImage() {
+            const prompt = document.getElementById('imageInput').value.trim();
+            
+            if (!prompt) {
+                alert("الرجاء إدخال وصف الصورة أولاً");
+                return;
+            }
+
+            resetUI();
+            document.getElementById('btnImage').disabled = true;
+            showStatus("جاري توليد الصورة... (قد يستغرق 10-20 ثانية)");
+
+            try {
+                const response = await fetch(`${GATEWAY_URL}/image`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt: prompt })
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || "فشل توليد الصورة");
+                }
+
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                
+                const imgEl = document.getElementById('generatedImage');
+                imgEl.src = url;
+                
+                document.getElementById('spinner').style.display = 'none';
+                showStatus("✅ تم توليد الصورة بنجاح");
+                document.getElementById('imageResultBox').style.display = 'block';
+                document.getElementById('btnDownloadImage').style.display = 'block';
+
+            } catch (error) {
+                showError(error.message);
+            } finally {
+                document.getElementById('btnImage').disabled = false;
+            }
+        }
+
+        // ==========================================
+        // Helpers & Download
+        // ==========================================
 
         function showError(msg) {
             document.getElementById('spinner').style.display = 'none';
             showStatus(`❌ خطأ: ${msg}`);
             document.getElementById('btnAudio').disabled = false;
             document.getElementById('btnText').disabled = false;
+            document.getElementById('btnTTS').disabled = false;
+            document.getElementById('btnImage').disabled = false;
         }
 
         function downloadJSON() {
@@ -462,6 +658,26 @@
             document.body.appendChild(downloadAnchorNode);
             downloadAnchorNode.click();
             downloadAnchorNode.remove();
+        }
+
+        function downloadMedia(elementId, filename) {
+            const element = document.getElementById(elementId);
+            if (!element || !element.src) return;
+            
+            // If the src is an object URL (blob), fetch it and download
+            fetch(element.src)
+                .then(res => res.blob())
+                .then(blob => {
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    a.remove();
+                    URL.revokeObjectURL(url);
+                })
+                .catch(err => alert("فشل تحميل الملف: " + err.message));
         }
     </script>
 </body>
