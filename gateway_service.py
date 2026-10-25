@@ -1,12 +1,11 @@
 """
 ==============================================================================
-Lordera AI — Gateway Service v3.5.1
+Lordera AI — Gateway Service v3.5.2
 Smart Chat Orchestrator + Edge-TTS (Free Arabic Voices)
 ==============================================================================
-CHANGELOG v3.4.0 → v3.5.1:
-  • MAJOR: Replaced ElevenLabs with Microsoft Edge-TTS (free, no API key).
-  • FIX: CORS (allow_credentials=False) to allow browser clients.
-  • Version bumped to 3.5.1.
+CHANGELOG v3.5.1 → v3.5.2:
+  • FIX: Expose actual Groq API error messages to the frontend instead of generic 'HTTPException'.
+  • FIX: Improved error handling in _groq_request for better debugging.
 ==============================================================================
 """
 import os
@@ -31,7 +30,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
 
-
 # ==============================================================================
 # Logging
 # ==============================================================================
@@ -40,7 +38,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger("gateway")
-
 
 # ==============================================================================
 # Configuration
@@ -78,22 +75,18 @@ CHAT_MAX_TOKENS     = int(os.getenv("CHAT_MAX_TOKENS", "1024"))
 
 # ── Edge TTS Voices ──
 EDGE_VOICES = {
-    "hamed": "ar-SA-HamedNeural",      # ذكر سعودي (افتراضي)
-    "zariyah": "ar-SA-ZariyahNeural",  # أنثى سعودية
-    "salma": "ar-EG-SalmaNeural",      # أنثى مصرية
-    "shakir": "ar-EG-ShakirNeural",    # ذكر مصري
+    "hamed": "ar-SA-HamedNeural",
+    "zariyah": "ar-SA-ZariyahNeural",
+    "salma": "ar-EG-SalmaNeural",
+    "shakir": "ar-EG-ShakirNeural",
 }
 
 def _normalize_tts_voice(v: Optional[str]) -> str:
-    if not v:
-        return EDGE_VOICES["hamed"]
+    if not v: return EDGE_VOICES["hamed"]
     v_lower = v.lower()
-    if v_lower in EDGE_VOICES:
-        return EDGE_VOICES[v_lower]
-    if "-Neural" in v:
-        return v
+    if v_lower in EDGE_VOICES: return EDGE_VOICES[v_lower]
+    if "-Neural" in v: return v
     return EDGE_VOICES["hamed"]
-
 
 # ==============================================================================
 # Prompts
@@ -126,10 +119,9 @@ CHAT_SYSTEM_PROMPT = """أنت Lordera — مساعد ذكاء اصطناعي ع
 مهمتك: اقرأ المحادثة، قرر الإجراء المناسب، واكتب رداً عربياً طبيعياً.
 
 الإجراءات المتاحة:
-- "chat": محادثة عادية (افتراضي). استخدمها لأي كلام عادي، أسئلة، دردشة.
+- "chat": محادثة عادية (افتراضي).
 - "image": المستخدم يطلب توليد صورة. توفير "prompt_en" (وصف إنجليزي غني جداً).
-- "tts": تحويل نص إلى كلام. توفير "text" (النص المطلوب نطقه بالعربية الفصحى أو حسب السياق). 
-  *ملاحظة:* محرك الصوت لا يدعم وسوم المشاعر، لذا اكتب النص نظيفاً وواضحاً.
+- "tts": تحويل نص إلى كلام. توفير "text" (النص المطلوب نطقه). 
 - "analyze": تحليل نص. توفير "text".
 
 قواعد صارمة:
@@ -144,7 +136,6 @@ CHAT_SYSTEM_PROMPT = """أنت Lordera — مساعد ذكاء اصطناعي ع
 4. للصوت: استخرج النص المطلوب نطقه فقط، بدون "قل:" أو "انطق:".
 """
 
-
 # ==============================================================================
 # Enums & Data
 # ==============================================================================
@@ -154,7 +145,6 @@ class JobState(str, Enum):
     COMPLETED  = "completed"
     FAILED     = "failed"
     CANCELLED  = "cancelled"
-
 
 @dataclass
 class Job:
@@ -173,7 +163,6 @@ class Job:
     result: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
     future: Optional[asyncio.Future] = None
-
 
 # ==============================================================================
 # JobStore, RateLimiter, CircuitBreaker
@@ -230,7 +219,6 @@ class JobStore:
     def size(self) -> int:
         return len(self._jobs)
 
-
 class RateLimiter:
     def __init__(self, window: float, max_requests: int):
         self._buckets: Dict[str, Deque[float]] = defaultdict(deque)
@@ -260,7 +248,6 @@ class RateLimiter:
                         self._buckets.pop(ip, None)
             except asyncio.CancelledError:
                 break
-
 
 class CircuitBreaker:
     def __init__(self, name: str, failure_threshold: int = 5, recovery_timeout: float = 60.0):
@@ -294,7 +281,6 @@ class CircuitBreaker:
     def is_open(self) -> bool:
         return self.opened_at is not None
 
-
 # ==============================================================================
 # Global State
 # ==============================================================================
@@ -316,7 +302,6 @@ metrics = {
     "total_images": 0, "total_tts": 0,
     "processing_times": deque(maxlen=50), "started_at": time.time(),
 }
-
 
 # ==============================================================================
 # JSON extraction & Analysis Helpers
@@ -340,7 +325,6 @@ def _extract_json(raw: str) -> Dict[str, Any]:
                     except: break
     return {"raw_analysis": text[:2000]}
 
-
 def _normalize_analysis(data: Dict[str, Any]) -> Dict[str, Any]:
     if "raw_analysis" in data: return data
     summary = str(data.get("summary", "")).strip()[:500]
@@ -354,7 +338,6 @@ def _normalize_analysis(data: Dict[str, Any]) -> Dict[str, Any]:
     allowed_intents = {"request", "complaint", "inquiry", "informational", "feedback", "other"}
     if intent not in allowed_intents: intent = "other"
     return {"summary": summary, "sentiment": sentiment, "key_topics": topics, "intent": intent}
-
 
 # ==============================================================================
 # API Clients
@@ -374,23 +357,26 @@ async def _groq_request(method: str, path: str, **kwargs) -> httpx.Response:
             if breaker: await breaker.record_success()
             return res
         except httpx.HTTPStatusError as e:
+            error_detail = e.response.text
             if 400 <= e.response.status_code < 500 and e.response.status_code != 429:
                 if breaker: await breaker.record_failure()
-                raise HTTPException(502, f"Groq error: {e.response.text[:200]}")
+                raise HTTPException(502, f"Groq API {e.response.status_code}: {error_detail}")
             if breaker: await breaker.record_failure()
-        except Exception:
+            if attempt == MAX_RETRIES:
+                raise HTTPException(502, f"Groq API {e.response.status_code} after retries: {error_detail}")
+        except Exception as e:
             if breaker: await breaker.record_failure()
+            if attempt == MAX_RETRIES:
+                raise HTTPException(502, f"Groq connection failed: {str(e)}")
         if attempt < MAX_RETRIES: await asyncio.sleep(RETRY_BACKOFF ** attempt)
 
     raise HTTPException(502, "Groq unreachable")
-
 
 async def transcribe_audio(audio_bytes: bytes, filename: str, content_type: str) -> str:
     files = {"file": (filename, audio_bytes, content_type or "audio/mpeg")}
     data = {"model": GROQ_WHISPER_MODEL, "response_format": "json"}
     res = await _groq_request("POST", "/audio/transcriptions", files=files, data=data, timeout=WHISPER_TIMEOUT, breaker=whisper_cb)
     return (res.json().get("text") or "").strip()
-
 
 async def analyze_transcript(transcript: str) -> Dict[str, Any]:
     json_body = {
@@ -404,7 +390,6 @@ async def analyze_transcript(transcript: str) -> Dict[str, Any]:
     res = await _groq_request("POST", "/chat/completions", json_body=json_body, timeout=QWEN_TIMEOUT, breaker=qwen_cb)
     return _normalize_analysis(_extract_json(res.json()["choices"][0]["message"]["content"]))
 
-
 async def _generate_image_bytes(prompt_en: str) -> Tuple[bytes, str]:
     encoded = urllib.parse.quote(prompt_en)
     url = f"{POLLINATIONS_IMAGE_BASE}/prompt/{encoded}?model={POLLINATIONS_IMAGE_MODEL}&width=1024&height=1024&nologo=true&enhance=true"
@@ -413,7 +398,6 @@ async def _generate_image_bytes(prompt_en: str) -> Tuple[bytes, str]:
     res = await http_client.get(url, headers=headers, timeout=IMAGE_TIMEOUT)
     res.raise_for_status()
     return res.content, res.headers.get("content-type", "image/jpeg")
-
 
 async def _generate_tts_bytes(text: str, voice: str) -> bytes:
     if tts_cb and not await tts_cb.allow():
@@ -435,7 +419,6 @@ async def _generate_tts_bytes(text: str, voice: str) -> bytes:
         if tts_cb: await tts_cb.record_failure()
         logger.error(f"Edge TTS failed: {e}")
         raise HTTPException(status_code=502, detail=f"Edge TTS failed: {type(e).__name__}")
-
 
 # ==============================================================================
 # Chat Orchestrator
@@ -490,7 +473,6 @@ async def orchestrate_chat(messages: List[Dict[str, str]]) -> Dict[str, Any]:
 
     return {"reply": reply, "action": "chat"}
 
-
 # ==============================================================================
 # Worker
 # ==============================================================================
@@ -505,7 +487,6 @@ async def process_job(job: Job) -> Dict[str, Any]:
     analysis = await analyze_transcript(transcript)
     metrics["total_completed"] += 1
     return {"transcript": transcript, "analysis": analysis}
-
 
 async def worker_loop() -> None:
     while True:
@@ -525,7 +506,6 @@ async def worker_loop() -> None:
             job_queue.task_done()
         except asyncio.CancelledError: break
         except Exception as e: logger.exception(f"Worker error: {e}"); await asyncio.sleep(1)
-
 
 # ==============================================================================
 # Lifespan
@@ -553,13 +533,11 @@ async def lifespan(app: FastAPI):
     await asyncio.gather(worker_task, cleanup_task, rate_cleanup_task, return_exceptions=True)
     await http_client.aclose()
 
-
 # ==============================================================================
 # FastAPI App & Endpoints
 # ==============================================================================
-app = FastAPI(title="Lordera AI Gateway", version="3.5.1", lifespan=lifespan)
+app = FastAPI(title="Lordera AI Gateway", version="3.5.2", lifespan=lifespan)
 
-# ⬇️ إصلاح CORS للواجهة
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -577,7 +555,7 @@ class ImageRequest(BaseModel): prompt: str
 async def health_check():
     return {
         "status": "healthy" if GROQ_API_KEY else "degraded",
-        "version": "3.5.1",
+        "version": "3.5.2",
         "tts_engine": "Edge-TTS (Free)",
         "groq_configured": bool(GROQ_API_KEY)
     }
@@ -587,9 +565,12 @@ async def chat_endpoint(request: Request, body: ChatRequest):
     if not await rate_limiter.check(request.client.host): raise HTTPException(429, "Rate limited")
     try:
         return await orchestrate_chat([{"role": m.role, "content": m.content} for m in body.messages])
+    except HTTPException as e:
+        logger.error(f"Chat HTTP Error: {e.detail}")
+        return {"reply": f"⚠️ خطأ: {e.detail}", "action": "chat"}
     except Exception as e:
         logger.exception("Chat failed")
-        return {"reply": f"⚠️ خطأ: {type(e).__name__}", "action": "chat"}
+        return {"reply": f"⚠️ خطأ تقني: {str(e)}", "action": "chat"}
 
 @app.post("/transcribe")
 async def transcribe_endpoint(file: UploadFile = File(...)):
