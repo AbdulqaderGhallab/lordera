@@ -1,14 +1,14 @@
 """
 ==============================================================================
-Lordera AI — Gateway Service v3.1.0 (Groq + Pollinations.ai backend)
+Lordera AI — Gateway Service v3.1.2 (Pollinations key passthrough fix)
 ==============================================================================
-CHANGELOG v3.0.0 → v3.1.0:
-  • ADDED: /tts endpoint → Pollinations.ai text-to-speech (OpenAI Audio model).
-  • ADDED: /image endpoint → Pollinations.ai text-to-image (FLUX model).
-  • ADDED: POLLINATIONS_API_KEY to config (optional, for higher rate limits).
-  • ADDED: urllib.parse and fastapi.Response imports.
-  • Updated root endpoint and version to 3.1.0.
-  • All existing Groq endpoints (Whisper, Qwen) remain unchanged.
+CHANGELOG v3.1.1 → v3.1.2:
+  • Added pollinations_api_configured to /health response.
+  • Image endpoint now passes API key as &key= query param (in addition to
+    Authorization header) because Pollinations GET /prompt ignores headers
+    in some deployments, causing FREE_LIMIT errors.
+  • TTS endpoint now passes API key as ?key= query param similarly.
+  • Version bumped to 3.1.2.
 ==============================================================================
 """
 import os
@@ -19,6 +19,7 @@ import re
 import logging
 import asyncio
 import urllib.parse
+import base64
 from contextlib import asynccontextmanager
 from typing import Optional, Dict, Any, Deque
 from dataclasses import dataclass, field
@@ -51,7 +52,7 @@ GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
 GROQ_QWEN_MODEL    = os.getenv("GROQ_QWEN_MODEL", "qwen/qwen3.8-27b")
 
 # Pollinations.ai (TTS & Image)
-POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "") # Optional, for higher rate limits
+POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
 POLLINATIONS_TTS_BASE = "https://text.pollinations.ai"
 POLLINATIONS_IMAGE_BASE = "https://image.pollinations.ai"
 
@@ -79,7 +80,7 @@ MAX_TEXT_LENGTH     = int(os.getenv("MAX_TEXT_LENGTH", "10000"))
 
 
 # ------------------------------------------------------------------------------
-# Prompts (mirror the original qwen_service.py output contract)
+# Prompts
 # ------------------------------------------------------------------------------
 SYSTEM_PROMPT = (
     "You are a precise semantic analyzer. "
@@ -123,7 +124,7 @@ class Job:
     filename: str
     content_type: str
     file_content: bytes
-    job_type: str = "audio"  # "audio" or "text"
+    job_type: str = "audio"
     input_text: Optional[str] = None
     state: JobState = JobState.QUEUED
     position: int = 0
@@ -238,7 +239,7 @@ class RateLimiter:
 
 
 # ==============================================================================
-# Circuit Breaker (protects Groq API calls)
+# Circuit Breaker
 # ==============================================================================
 class CircuitBreaker:
     def __init__(self, name: str, failure_threshold: int = 5, recovery_timeout: float = 60.0):
@@ -360,7 +361,7 @@ def _normalize_analysis(data: Dict[str, Any]) -> Dict[str, Any]:
 
 
 # ==============================================================================
-# Groq API client (with retry + circuit breaker + 429 handling)
+# Groq API client
 # ==============================================================================
 async def _groq_request(
     method: str,
@@ -494,7 +495,7 @@ async def analyze_transcript(transcript: str, request_id: str) -> Dict[str, Any]
 
 
 # ==============================================================================
-# Worker: Sequential Job Processor
+# Worker
 # ==============================================================================
 async def process_job(job: Job) -> Dict[str, Any]:
     request_id = job.id
@@ -628,7 +629,7 @@ async def lifespan(app: FastAPI):
     global worker_task, cleanup_task, rate_cleanup_task
 
     logger.info("=" * 70)
-    logger.info("Lordera Gateway v3.1.0 starting (Groq + Pollinations)")
+    logger.info("Lordera Gateway v3.1.2 starting (Groq + Pollinations)")
     logger.info(f"Groq API base:    {GROQ_API_BASE}")
     logger.info(f"Whisper model:    {GROQ_WHISPER_MODEL}")
     logger.info(f"Qwen model:       {GROQ_QWEN_MODEL}")
@@ -676,7 +677,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera AI Gateway",
     description="Async job-based orchestrator using Groq API + Pollinations.ai.",
-    version="3.1.0",
+    version="3.1.2",
     lifespan=lifespan,
 )
 
@@ -717,6 +718,7 @@ class JobStatusResponse(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     groq_api_configured: bool
+    pollinations_api_configured: bool
     groq_whisper_model: str
     groq_qwen_model: str
     whisper_circuit_open: bool
@@ -732,7 +734,7 @@ class TextJobSubmitRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     text: str
-    voice: str = "nova" # alloy, echo, fable, onyx, nova, shimmer
+    voice: str = "nova"
 
 class ImageRequest(BaseModel):
     prompt: str
@@ -745,7 +747,7 @@ class ImageRequest(BaseModel):
 async def root():
     return {
         "service": "Lordera AI Gateway",
-        "version": "3.1.0",
+        "version": "3.1.2",
         "backend": "Groq + Pollinations",
         "endpoints": {
             "submit_audio": "POST /jobs",
@@ -765,9 +767,11 @@ async def root():
 @app.get("/health", response_model=HealthResponse)
 async def health_check():
     groq_ok = bool(GROQ_API_KEY)
+    pollinations_ok = bool(POLLINATIONS_API_KEY)
     return HealthResponse(
         status="healthy" if groq_ok else "degraded",
         groq_api_configured=groq_ok,
+        pollinations_api_configured=pollinations_ok,
         groq_whisper_model=GROQ_WHISPER_MODEL,
         groq_qwen_model=GROQ_QWEN_MODEL,
         whisper_circuit_open=whisper_cb.is_open(),
@@ -802,6 +806,7 @@ async def queue_status():
         "groq_whisper_model": GROQ_WHISPER_MODEL,
         "groq_qwen_model":    GROQ_QWEN_MODEL,
         "groq_api_configured": bool(GROQ_API_KEY),
+        "pollinations_api_configured": bool(POLLINATIONS_API_KEY),
     }
 
 
@@ -989,32 +994,75 @@ async def cancel_job(job_id: str):
 # --------------- Pollinations.ai: TTS & Image -----------------
 @app.post("/tts")
 async def generate_tts(req: TTSRequest):
-    """Generates audio from text using Pollinations.ai OpenAI-audio model."""
-    encoded_text = urllib.parse.quote(req.text)
-    # Pollinations GET endpoint returns audio/mpeg directly
-    url = f"{POLLINATIONS_TTS_BASE}/{encoded_text}?model=openai-audio&voice={req.voice}"
-    
-    headers = {}
+    """
+    Generates audio from text using Pollinations OpenAI-compatible endpoint.
+    """
+    url = f"{POLLINATIONS_TTS_BASE}/openai"
+    if POLLINATIONS_API_KEY:
+        url += f"?key={POLLINATIONS_API_KEY}"
+
+    headers = {"Content-Type": "application/json"}
     if POLLINATIONS_API_KEY:
         headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"
 
+    payload = {
+        "model": "openai-audio",
+        "modalities": ["text", "audio"],
+        "audio": {
+            "voice": req.voice,
+            "format": "mp3",
+        },
+        "messages": [
+            {"role": "user", "content": req.text}
+        ],
+    }
+
     try:
-        resp = await http_client.get(url, headers=headers, timeout=TTS_TIMEOUT)
+        resp = await http_client.post(
+            url,
+            json=payload,
+            headers=headers,
+            timeout=TTS_TIMEOUT,
+        )
         resp.raise_for_status()
-        return Response(content=resp.content, media_type="audio/mpeg")
+
+        data = resp.json()
+        try:
+            audio_b64 = data["choices"][0]["message"]["audio"]["data"]
+            audio_bytes = base64.b64decode(audio_b64)
+        except (KeyError, IndexError, TypeError) as e:
+            logger.error(f"Pollinations TTS unexpected shape: {str(data)[:300]}")
+            raise HTTPException(
+                status_code=502,
+                detail=f"Unexpected Pollinations response: {str(data)[:300]}",
+            )
+
+        return Response(content=audio_bytes, media_type="audio/mpeg")
+
     except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=502, detail=f"TTS generation failed: {e.response.text[:200]}")
+        logger.error(f"Pollinations TTS HTTP {e.response.status_code}: {e.response.text[:300]}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"TTS generation failed: {e.response.text[:300]}",
+        )
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"TTS generation error: {type(e).__name__}")
+        logger.exception("TTS generation error")
+        raise HTTPException(
+            status_code=502,
+            detail=f"TTS generation error: {type(e).__name__}: {str(e)[:200]}",
+        )
 
 
 @app.post("/image")
 async def generate_image(req: ImageRequest):
     """Generates an image from a prompt using Pollinations.ai FLUX model."""
     encoded_prompt = urllib.parse.quote(req.prompt)
-    # Default is flux, 1024x1024. Add parameters if needed.
     url = f"{POLLINATIONS_IMAGE_BASE}/prompt/{encoded_prompt}?model=flux&width=1024&height=1024&nologo=true"
-    
+    if POLLINATIONS_API_KEY:
+        url += f"&key={POLLINATIONS_API_KEY}"
+
     headers = {}
     if POLLINATIONS_API_KEY:
         headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"

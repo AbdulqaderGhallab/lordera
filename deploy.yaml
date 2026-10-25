@@ -3,7 +3,7 @@ version: "2.0"
 
 services:
   gateway:
-    image: abdulqaderghallab/lordera-gateway:v8
+    image: abdulqaderghallab/lordera-gateway:v10
     env:
       # ── Groq API (Whisper + Qwen) ────────────────────────────────────
       - "GROQ_API_KEY=xxxxxx"
