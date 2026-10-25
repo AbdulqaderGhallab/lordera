@@ -1,14 +1,14 @@
 """
 ==============================================================================
-Lordera AI — Gateway Service v3.1.2 (Pollinations key passthrough fix)
+Lordera AI — Gateway Service v3.1.3 (Fixed TTS endpoint to gen.pollinations.ai)
 ==============================================================================
-CHANGELOG v3.1.1 → v3.1.2:
-  • Added pollinations_api_configured to /health response.
-  • Image endpoint now passes API key as &key= query param (in addition to
-    Authorization header) because Pollinations GET /prompt ignores headers
-    in some deployments, causing FREE_LIMIT errors.
-  • TTS endpoint now passes API key as ?key= query param similarly.
-  • Version bumped to 3.1.2.
+CHANGELOG v3.1.2 → v3.1.3:
+  • CRITICAL FIX: TTS was hitting text.pollinations.ai which ignores the API key
+    and enforces a strict 30s rate limit. Switched to gen.pollinations.ai which
+    honors the sk_... API key.
+  • Implemented two fallback methods for TTS: GET /audio/{text} and
+    POST /v1/audio/speech (OpenAI compatible).
+  • Version bumped to 3.1.3.
 ==============================================================================
 """
 import os
@@ -51,9 +51,10 @@ GROQ_API_BASE      = os.getenv("GROQ_API_BASE", "https://api.groq.com/openai/v1"
 GROQ_WHISPER_MODEL = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
 GROQ_QWEN_MODEL    = os.getenv("GROQ_QWEN_MODEL", "qwen/qwen3.8-27b")
 
-# Pollinations.ai (TTS & Image)
+# Pollinations.ai
 POLLINATIONS_API_KEY = os.getenv("POLLINATIONS_API_KEY", "")
-POLLINATIONS_TTS_BASE = "https://text.pollinations.ai"
+# ✅ النقطة الجديدة التي تدعم المفتاح
+POLLINATIONS_TTS_BASE = "https://gen.pollinations.ai" 
 POLLINATIONS_IMAGE_BASE = "https://image.pollinations.ai"
 
 WHISPER_TIMEOUT = float(os.getenv("WHISPER_TIMEOUT", "120.0"))
@@ -629,7 +630,7 @@ async def lifespan(app: FastAPI):
     global worker_task, cleanup_task, rate_cleanup_task
 
     logger.info("=" * 70)
-    logger.info("Lordera Gateway v3.1.2 starting (Groq + Pollinations)")
+    logger.info("Lordera Gateway v3.1.3 starting (Groq + Pollinations)")
     logger.info(f"Groq API base:    {GROQ_API_BASE}")
     logger.info(f"Whisper model:    {GROQ_WHISPER_MODEL}")
     logger.info(f"Qwen model:       {GROQ_QWEN_MODEL}")
@@ -677,7 +678,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera AI Gateway",
     description="Async job-based orchestrator using Groq API + Pollinations.ai.",
-    version="3.1.2",
+    version="3.1.3",
     lifespan=lifespan,
 )
 
@@ -747,7 +748,7 @@ class ImageRequest(BaseModel):
 async def root():
     return {
         "service": "Lordera AI Gateway",
-        "version": "3.1.2",
+        "version": "3.1.3",
         "backend": "Groq + Pollinations",
         "endpoints": {
             "submit_audio": "POST /jobs",
@@ -995,49 +996,44 @@ async def cancel_job(job_id: str):
 @app.post("/tts")
 async def generate_tts(req: TTSRequest):
     """
-    Generates audio from text using Pollinations OpenAI-compatible endpoint.
+    Generates audio from text using the new gen.pollinations.ai endpoint
+    which properly supports API keys.
     """
-    url = f"{POLLINATIONS_TTS_BASE}/openai"
+    # الطريقة الأولى: GET المباشر
+    encoded_text = urllib.parse.quote(req.text)
+    url = f"{POLLINATIONS_TTS_BASE}/audio/{encoded_text}?voice={req.voice}"
     if POLLINATIONS_API_KEY:
-        url += f"?key={POLLINATIONS_API_KEY}"
+        url += f"&key={POLLINATIONS_API_KEY}"
 
-    headers = {"Content-Type": "application/json"}
+    headers = {}
     if POLLINATIONS_API_KEY:
         headers["Authorization"] = f"Bearer {POLLINATIONS_API_KEY}"
 
-    payload = {
-        "model": "openai-audio",
-        "modalities": ["text", "audio"],
-        "audio": {
-            "voice": req.voice,
-            "format": "mp3",
-        },
-        "messages": [
-            {"role": "user", "content": req.text}
-        ],
-    }
-
     try:
-        resp = await http_client.post(
-            url,
-            json=payload,
-            headers=headers,
-            timeout=TTS_TIMEOUT,
-        )
+        resp = await http_client.get(url, headers=headers, timeout=TTS_TIMEOUT)
+        
+        # إذا فشلت GET، نجرب POST المتوافقة مع OpenAI
+        if resp.status_code != 200:
+            logger.warning(f"GET TTS failed ({resp.status_code}), trying POST /v1/audio/speech")
+            post_url = f"{POLLINATIONS_TTS_BASE}/v1/audio/speech"
+            payload = {
+                "model": "openai-audio",
+                "input": req.text,
+                "voice": req.voice,
+                "response_format": "mp3"
+            }
+            headers["Content-Type"] = "application/json"
+            resp = await http_client.post(post_url, json=payload, headers=headers, timeout=TTS_TIMEOUT)
+
         resp.raise_for_status()
 
-        data = resp.json()
-        try:
-            audio_b64 = data["choices"][0]["message"]["audio"]["data"]
-            audio_bytes = base64.b64decode(audio_b64)
-        except (KeyError, IndexError, TypeError) as e:
-            logger.error(f"Pollinations TTS unexpected shape: {str(data)[:300]}")
-            raise HTTPException(
-                status_code=502,
-                detail=f"Unexpected Pollinations response: {str(data)[:300]}",
-            )
+        # التحقق من أن الرد صوت وليس JSON خطأ
+        content_type = resp.headers.get("content-type", "")
+        if "application/json" in content_type:
+            error_data = resp.json()
+            raise HTTPException(status_code=502, detail=f"Pollinations TTS error: {error_data}")
 
-        return Response(content=audio_bytes, media_type="audio/mpeg")
+        return Response(content=resp.content, media_type="audio/mpeg")
 
     except httpx.HTTPStatusError as e:
         logger.error(f"Pollinations TTS HTTP {e.response.status_code}: {e.response.text[:300]}")

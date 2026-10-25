@@ -3,14 +3,14 @@ version: "2.0"
 
 services:
   gateway:
-    image: abdulqaderghallab/lordera-gateway:v10
+    image: abdulqaderghallab/lordera-gateway:v11
     env:
       # ── Groq API (Whisper + Qwen) ────────────────────────────────────
-      - "GROQ_API_KEY=xxxxxx"
+      - "GROQ_API_KEY=xxx"
       - "GROQ_WHISPER_MODEL=whisper-large-v3"
       - "GROQ_QWEN_MODEL=qwen/qwen3.8-27b"
       # ── Pollinations.ai (TTS + Image) ────────────────────────────────
-      - "POLLINATIONS_API_KEY=xxxxxx"
+      - "POLLINATIONS_API_KEY=xxx"
       # ── Queue & Rate limiting ─────────────────────────────────────────
       - "MAX_QUEUE_SIZE=50"
       - "REJECT_THRESHOLD=0.9"
