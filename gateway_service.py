@@ -1,6 +1,6 @@
 """
 ==============================================================================
-Lordera AI — Gateway Service v4.0.1
+Lordera AI — Gateway Service v4.0.2
 - Text Chat (Groq / Qwen 3.8 27B)
 - Speech-to-Text (Groq / Whisper large-v3)
 - Text-to-Speech (Cartesia / sonic-3.6)
@@ -68,7 +68,6 @@ LEGACY_WAIT_TIMEOUT = float(os.getenv("LEGACY_WAIT_TIMEOUT", "120.0"))
 MAX_TEXT_LENGTH     = int(os.getenv("MAX_TEXT_LENGTH", "8000"))
 CHAT_MAX_HISTORY    = int(os.getenv("CHAT_MAX_HISTORY", "20"))
 CHAT_MAX_TOKENS     = int(os.getenv("CHAT_MAX_TOKENS", "2048"))
-# تم تقليلها إلى 4000 لتجنب انتهاء المهلة (Timeout) كما نصحت
 ANALYZE_MAX_TOKENS  = int(os.getenv("ANALYZE_MAX_TOKENS", "4000"))
 
 # ==============================================================================
@@ -83,7 +82,7 @@ CHAT_SYSTEM_PROMPT = """أنت لورديرا — مساعد ذكاء اصطنا
 - "analyze" : تحليل نصي هيكلي. المعاملات: params.text = النص المطلوب تحليله حرفيًّا.
 
 أمثلة صارمة:
-المستخدم: "مرحباً" 
+المستخدم: "مرحباً"
 → {"action":"chat","reply":"أهلاً بك في لورديرا.","params":{}}
 
 المستخدم: "حوّل هذه الجملة إلى صوت: أهلاً بكم"
@@ -96,6 +95,7 @@ CHAT_SYSTEM_PROMPT = """أنت لورديرا — مساعد ذكاء اصطنا
 1. JSON واحد صحيح فقط. لا شرح قبله أو بعده.
 2. "reply" دائماً بالعربية، مختصر (سطر إلى ثلاثة).
 3. عند "tts" أو "analyze" انسخ النص المطلوب حرفيًّا كما ذكره المستخدم دون تعديل.
+4. "params" دائماً كائن JSON (dict) وليس نصًّا.
 """
 
 ANALYZER_SYSTEM_PROMPT = (
@@ -332,12 +332,16 @@ metrics = {
 def _extract_json(raw: str) -> Dict[str, Any]:
     text = (raw or "").strip()
     try:
-        return json.loads(text)
+        result = json.loads(text)
+        if isinstance(result, dict):
+            return result
     except json.JSONDecodeError:
         pass
     fenced = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
     try:
-        return json.loads(fenced)
+        result = json.loads(fenced)
+        if isinstance(result, dict):
+            return result
     except json.JSONDecodeError:
         pass
     start = text.find("{")
@@ -351,9 +355,12 @@ def _extract_json(raw: str) -> Dict[str, Any]:
                 depth -= 1
                 if depth == 0:
                     try:
-                        return json.loads(text[start:i + 1])
+                        result = json.loads(text[start:i + 1])
+                        if isinstance(result, dict):
+                            return result
                     except json.JSONDecodeError:
-                        break
+                        pass
+                    break
     return {"raw_analysis": text[:2000]}
 
 def _count_words(text: str) -> int:
@@ -491,9 +498,15 @@ def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict
     t = 0.0
     for s in sentences_out:
         for g in s.get("segments", []):
-            timing = g.setdefault("timing", {})
+            timing = g.get("timing")
+            if not isinstance(timing, dict):
+                timing = {}
+                g["timing"] = timing
+            dur = timing.get("duration_estimate", 0.5)
+            if not isinstance(dur, (int, float)):
+                dur = 0.5
             timing["start"] = round(t, 2)
-            timing["end"] = round(t + timing.get("duration_estimate", 0.5), 2)
+            timing["end"] = round(t + dur, 2)
             t = timing["end"]
 
     return {
@@ -508,70 +521,92 @@ def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict
     }
 
 def _fallback_analysis(text: str) -> Dict[str, Any]:
-    sentences_raw = re.split(r"(?<=[.!?؟])\s+", text.strip())
-    sentences_raw = [s for s in sentences_raw if s.strip()]
-    sentences_out: List[Dict[str, Any]] = []
-    cursor = 0
-    for idx, s_text in enumerate(sentences_raw, start=1):
-        pos = text.find(s_text, cursor)
-        if pos < 0:
-            pos = cursor
-        end = pos + len(s_text)
-        cursor = end
+    try:
+        if not isinstance(text, str):
+            text = str(text or "")
+        sentences_raw = re.split(r"(?<=[.!?؟])\s+", text.strip())
+        sentences_raw = [s for s in sentences_raw if s.strip()]
+        sentences_out: List[Dict[str, Any]] = []
+        cursor = 0
+        for idx, s_text in enumerate(sentences_raw, start=1):
+            pos = text.find(s_text, cursor)
+            if pos < 0:
+                pos = cursor
+            end = pos + len(s_text)
+            cursor = end
 
-        segments_out = []
-        words = s_text.split()
-        s_cursor = pos
-        for g_idx in range(0, len(words), 5):
-            g_words = words[g_idx:g_idx + 5]
-            g_text = " ".join(g_words)
-            g_pos = text.find(g_text, s_cursor)
-            if g_pos < 0:
-                g_pos = s_cursor
-            g_end = g_pos + len(g_text)
-            s_cursor = g_end
-            wc = len(g_words)
-            dur = max(0.3, wc / 2.7)
-            segments_out.append({
-                "id": f"s{idx}-g{len(segments_out)+1}",
-                "order": len(segments_out) + 1,
-                "text": g_text,
-                "word_count": wc,
-                "char_start": g_pos,
-                "char_end": g_end,
-                "timing": {"start": None, "end": None,
-                           "duration_estimate": round(dur, 2),
-                           "source": "estimated"},
-                "visual_elements": [],
+            segments_out = []
+            words = s_text.split()
+            s_cursor = pos
+            for g_idx in range(0, len(words), 5):
+                g_words = words[g_idx:g_idx + 5]
+                g_text = " ".join(g_words)
+                g_pos = text.find(g_text, s_cursor)
+                if g_pos < 0:
+                    g_pos = s_cursor
+                g_end = g_pos + len(g_text)
+                s_cursor = g_end
+                wc = len(g_words)
+                dur = max(0.3, wc / 2.7)
+                segments_out.append({
+                    "id": f"s{idx}-g{len(segments_out)+1}",
+                    "order": len(segments_out) + 1,
+                    "text": g_text,
+                    "word_count": wc,
+                    "char_start": g_pos,
+                    "char_end": g_end,
+                    "timing": {"start": None, "end": None,
+                               "duration_estimate": round(dur, 2),
+                               "source": "estimated"},
+                    "visual_elements": [],
+                })
+
+            sentences_out.append({
+                "id": f"s{idx}",
+                "order": idx,
+                "text": s_text,
+                "char_start": pos,
+                "char_end": end,
+                "word_count": len(words),
+                "segments": segments_out,
             })
 
-        sentences_out.append({
-            "id": f"s{idx}",
-            "order": idx,
-            "text": s_text,
-            "char_start": pos,
-            "char_end": end,
-            "word_count": len(words),
-            "segments": segments_out,
-        })
+        t = 0.0
+        for s in sentences_out:
+            for g in s.get("segments", []):
+                timing = g.get("timing")
+                if not isinstance(timing, dict):
+                    timing = {}
+                    g["timing"] = timing
+                dur = timing.get("duration_estimate", 0.5)
+                if not isinstance(dur, (int, float)):
+                    dur = 0.5
+                timing["start"] = round(t, 2)
+                timing["end"] = round(t + dur, 2)
+                t = timing["end"]
 
-    t = 0.0
-    for s in sentences_out:
-        for g in s["segments"]:
-            g["timing"]["start"] = round(t, 2)
-            g["timing"]["end"] = round(t + g["timing"]["duration_estimate"], 2)
-            t = g["timing"]["end"]
-
-    return {
-        "original_text": text,
-        "summary": text[:200],
-        "sentiment": "neutral",
-        "intent": "other",
-        "key_topics": [],
-        "sentences": sentences_out,
-        "timing_source": "estimated",
-        "ai_analysis": False,
-    }
+        return {
+            "original_text": text,
+            "summary": text[:200],
+            "sentiment": "neutral",
+            "intent": "other",
+            "key_topics": [],
+            "sentences": sentences_out,
+            "timing_source": "estimated",
+            "ai_analysis": False,
+        }
+    except Exception as e:
+        logger.exception(f"_fallback_analysis unexpected: {type(e).__name__}: {e}")
+        return {
+            "original_text": text if isinstance(text, str) else "",
+            "summary": "",
+            "sentiment": "neutral",
+            "intent": "other",
+            "key_topics": [],
+            "sentences": [],
+            "timing_source": "estimated",
+            "ai_analysis": False,
+        }
 
 # ==============================================================================
 # Groq client
@@ -651,53 +686,88 @@ async def transcribe_audio(audio_bytes: bytes, filename: str,
     return (payload.get("text") or "").strip()
 
 # ==============================================================================
-# Analysis (sentences → segments → visual elements)
+# Analysis (sentences → segments → visual elements) — محصّنة بالكامل
 # ==============================================================================
 async def analyze_transcript(transcript: str, request_id: str) -> Dict[str, Any]:
-    if not transcript.strip():
-        return _fallback_analysis("")
-
-    prompt = ANALYZER_USER_PROMPT.replace("{transcript}", transcript)
-    
-    json_body = {
-        "model": GROQ_CHAT_MODEL,
-        "messages": [
-            {"role": "system", "content": ANALYZER_SYSTEM_PROMPT},
-            {"role": "user", "content": prompt},
-        ],
-        "temperature": 0,
-        "max_tokens": ANALYZE_MAX_TOKENS,
-        "response_format": {"type": "json_object"},
-        "reasoning_format": "hidden"
-    }
+    """محصّنة: لا ترمي أي استثناء. تُعيد dict دائمًا."""
     try:
-        response = await _groq_request(
-            "POST", "/chat/completions", json_body=json_body,
-            timeout=QWEN_TIMEOUT, request_id=request_id, breaker=chat_cb,
-        )
-        payload = response.json()
-        msg = payload.get("choices", [{}])[0].get("message", {})
-        raw = msg.get("content") or msg.get("reasoning_content") or ""
-        if not raw:
-            raise ValueError("Empty model response")
-        
-        logger.info(f"[{request_id}] ANALYZE raw_len={len(raw)} first_chars={raw[:120]!r}")
-    except Exception as e:
-        logger.warning(f"[{request_id}] Analysis AI call failed: {e}. Using fallback.")
-        return _fallback_analysis(transcript)
+        if not isinstance(transcript, str):
+            transcript = str(transcript or "")
 
-    parsed = _extract_json(raw)
-    logger.info(f"[{request_id}] ANALYZE parsed_keys={list(parsed.keys()) if isinstance(parsed,dict) else type(parsed)}")
-    
-    if "raw_analysis" in parsed:
-        logger.warning(f"[{request_id}] Analysis AI returned unparseable JSON. Using fallback.")
-        return _fallback_analysis(transcript)
+        if not transcript.strip():
+            return _fallback_analysis(transcript)
 
-    try:
-        return _validate_and_enrich_analysis(transcript, parsed)
+        prompt = ANALYZER_USER_PROMPT.replace("{transcript}", transcript)
+
+        json_body = {
+            "model": GROQ_CHAT_MODEL,
+            "messages": [
+                {"role": "system", "content": ANALYZER_SYSTEM_PROMPT},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0,
+            "max_tokens": ANALYZE_MAX_TOKENS,
+            "response_format": {"type": "json_object"},
+            # لا "reasoning_format" — قد يسبب سلوكًا غير متوقع
+        }
+
+        raw = ""
+        try:
+            response = await _groq_request(
+                "POST", "/chat/completions", json_body=json_body,
+                timeout=QWEN_TIMEOUT, request_id=request_id, breaker=chat_cb,
+            )
+            payload = response.json()
+            logger.info(
+                f"[{request_id}] ANALYZE payload_type={type(payload).__name__} "
+                f"keys={list(payload.keys()) if isinstance(payload, dict) else 'N/A'}"
+            )
+            if isinstance(payload, dict):
+                choices = payload.get("choices")
+                if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                    msg = choices[0].get("message")
+                    if isinstance(msg, dict):
+                        raw = msg.get("content") or msg.get("reasoning_content") or ""
+        except Exception as e:
+            logger.exception(f"[{request_id}] ANALYZE groq call failed: {type(e).__name__}: {e}")
+            return _fallback_analysis(transcript)
+
+        if not raw or not isinstance(raw, str):
+            logger.warning(f"[{request_id}] ANALYZE empty raw")
+            return _fallback_analysis(transcript)
+
+        logger.info(f"[{request_id}] ANALYZE raw_len={len(raw)} first={raw[:120]!r}")
+
+        parsed = _extract_json(raw)
+        if not isinstance(parsed, dict):
+            logger.warning(f"[{request_id}] ANALYZE non-dict parsed")
+            return _fallback_analysis(transcript)
+
+        if "raw_analysis" in parsed:
+            logger.warning(f"[{request_id}] ANALYZE unparseable JSON. raw first={raw[:200]!r}")
+            return _fallback_analysis(transcript)
+
+        try:
+            return _validate_and_enrich_analysis(transcript, parsed)
+        except Exception as e:
+            logger.exception(f"[{request_id}] ANALYZE validation failed: {type(e).__name__}: {e}")
+            return _fallback_analysis(transcript)
+
     except Exception as e:
-        logger.exception(f"[{request_id}] Analysis validation failed: {e}")
-        return _fallback_analysis(transcript)
+        logger.exception(f"[{request_id}] ANALYZE catastrophic: {type(e).__name__}: {e}")
+        try:
+            return _fallback_analysis(transcript if isinstance(transcript, str) else "")
+        except Exception:
+            return {
+                "original_text": transcript if isinstance(transcript, str) else "",
+                "summary": "",
+                "sentiment": "neutral",
+                "intent": "other",
+                "key_topics": [],
+                "sentences": [],
+                "timing_source": "estimated",
+                "ai_analysis": False,
+            }
 
 # ==============================================================================
 # Cartesia TTS
@@ -764,7 +834,7 @@ async def _generate_tts_bytes(text: str, voice_id: str) -> bytes:
                         detail=f"Cartesia unreachable: {type(last_exc).__name__}")
 
 # ==============================================================================
-# Chat orchestrator (no image action)
+# Chat orchestrator
 # ==============================================================================
 async def orchestrate_chat(messages: List[Dict[str, str]], request_id: str) -> Dict[str, Any]:
     trimmed = messages[-CHAT_MAX_HISTORY:] if len(messages) > CHAT_MAX_HISTORY else messages
@@ -781,40 +851,66 @@ async def orchestrate_chat(messages: List[Dict[str, str]], request_id: str) -> D
         "temperature": 0.4,
         "max_tokens": CHAT_MAX_TOKENS,
         "response_format": {"type": "json_object"},
-        "reasoning_format": "hidden"
+        # لا "reasoning_format" — قد يسبب سلوكًا غير متوقع
     }
     response = await _groq_request(
         "POST", "/chat/completions", json_body=json_body,
         timeout=QWEN_TIMEOUT, request_id=request_id, breaker=chat_cb,
     )
     payload = response.json()
-    try:
-        raw = payload["choices"][0]["message"]["content"]
-    except (KeyError, IndexError, TypeError) as e:
-        raise HTTPException(status_code=502, detail=f"Unexpected Groq response shape: {e}")
+
+    raw = ""
+    if isinstance(payload, dict):
+        choices = payload.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            msg = choices[0].get("message")
+            if isinstance(msg, dict):
+                raw = msg.get("content") or msg.get("reasoning_content") or ""
+
+    if not raw or not isinstance(raw, str):
+        raise HTTPException(status_code=502, detail="Empty chat model response")
 
     decision = _extract_json(raw)
-    action = decision.get("action")
-    reply = decision.get("reply")
-    params = decision.get("params") or {}
+    if not isinstance(decision, dict):
+        decision = {}
 
-    logger.info(f"[{request_id}] CHAT decision action={action!r} reply_len={len(reply or '')} params_keys={list(params.keys()) if isinstance(params,dict) else type(params)}")
+    action     = decision.get("action")
+    reply      = decision.get("reply")
+    raw_params = decision.get("params")
 
-    # اقبل params إذا جاءت كسلسلة نصية
-    if isinstance(params, str):
+    # ── دفاعي: params يجب أن تكون dict ────────────────────────────────
+    params: Dict[str, Any] = {}
+    if isinstance(raw_params, dict):
+        params = dict(raw_params)
+    elif isinstance(raw_params, str):
         try:
-            params = json.loads(params)
+            parsed_params = json.loads(raw_params)
+            if isinstance(parsed_params, dict):
+                params = parsed_params
         except Exception:
             params = {}
+    # إن كان params قائمة أو أي شيء غريب → تجاهله
 
-    # اقبل text مباشرة في الجذر إن لم يوجد داخل params
-    if not params.get("text") and decision.get("text"):
-        params["text"] = decision["text"]
+    # اقبل text في الجذر إن لم يوجد داخل params
+    if not params.get("text"):
+        root_text = decision.get("text")
+        if isinstance(root_text, str) and root_text.strip():
+            params["text"] = root_text
+
+    # تأكد أن text نص
+    if params.get("text") is not None and not isinstance(params["text"], str):
+        params["text"] = str(params["text"])
+
+    logger.info(
+        f"[{request_id}] CHAT action={action!r} reply_len={len(reply or '')} "
+        f"params_keys={list(params.keys())}"
+    )
 
     if action not in ("chat", "tts", "analyze"):
         fallback = decision.get("raw_analysis") or reply or str(raw)[:2000]
         return {"reply": (fallback or "").strip() or "عذراً، لم أفهم طلبك.", "action": "chat"}
-    if not reply:
+
+    if not isinstance(reply, str) or not reply.strip():
         reply = "حسناً."
 
     if action == "tts":
@@ -831,7 +927,7 @@ async def orchestrate_chat(messages: List[Dict[str, str]], request_id: str) -> D
                 "media_content_type": "audio/mpeg",
             }
         except Exception as e:
-            logger.error(f"[{request_id}] TTS failed: {e}")
+            logger.exception(f"[{request_id}] TTS failed: {type(e).__name__}: {e}")
             return {"reply": reply + f"\n\n⚠️ تعذر توليد الصوت ({type(e).__name__}).", "action": "chat"}
 
     if action == "analyze":
@@ -840,10 +936,10 @@ async def orchestrate_chat(messages: List[Dict[str, str]], request_id: str) -> D
             return {"reply": reply + "\n\n⚠️ لم أستطع تحديد النص المطلوب تحليله.", "action": "chat"}
         try:
             analysis = await analyze_transcript(text, request_id)
-            metrics["total_analyze"] += 1
+            metrics["total_analyze"] = metrics.get("total_analyze", 0) + 1
             return {"reply": reply, "action": "analyze", "analysis": analysis}
         except Exception as e:
-            logger.error(f"[{request_id}] Analyze failed: {e}")
+            logger.exception(f"[{request_id}] Analyze failed: {type(e).__name__}: {e}")
             return {"reply": reply + f"\n\n⚠️ تعذر التحليل ({type(e).__name__}).", "action": "chat"}
 
     return {"reply": reply, "action": "chat"}
@@ -946,7 +1042,7 @@ async def lifespan(app: FastAPI):
     global worker_task, cleanup_task, rate_cleanup_task
 
     logger.info("=" * 70)
-    logger.info("Lordera Gateway v4.0.1 starting")
+    logger.info("Lordera Gateway v4.0.2 starting")
     logger.info(f"Groq base:    {GROQ_API_BASE}")
     logger.info(f"Whisper:      {GROQ_WHISPER_MODEL}")
     logger.info(f"Chat model:   {GROQ_CHAT_MODEL}")
@@ -987,7 +1083,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera AI Gateway",
     description="Text chat + STT + Cartesia TTS + Deep analysis.",
-    version="4.0.1",
+    version="4.0.2",
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -1067,7 +1163,7 @@ class HealthResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera AI Gateway",
-        "version": "4.0.1",
+        "version": "4.0.2",
         "backend": "Groq + Cartesia",
         "endpoints": {
             "chat":         "POST /chat",
@@ -1088,7 +1184,7 @@ async def health_check():
     cartesia_ok = bool(CARTESIA_API_KEY and CARTESIA_API_KEY != "CHANGE_ME")
     return HealthResponse(
         status="healthy" if GROQ_API_KEY and cartesia_ok else "degraded",
-        version="4.0.1",
+        version="4.0.2",
         groq_api_configured=bool(GROQ_API_KEY),
         cartesia_api_configured=cartesia_ok,
         groq_whisper_model=GROQ_WHISPER_MODEL,
