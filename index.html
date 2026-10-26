@@ -96,7 +96,32 @@
     .bubble p.error-text { color: #d99a8a; }
     .user-bubble { padding: 10px 15px 11px; border: 1px solid rgba(224,207,169,.075); border-radius: 14px 4px 14px 14px; background: #141613; color: #d9d7cf; width: auto; }
     .assistant-bubble { padding: 0 3px; color: #c9c8c0; }
-    .chat-media-audio { width: 100%; margin-top: 10px; }
+    /* مشغل الصوت: مساحة مستقلة وواضحة بدل عنصر أصلي ينضغط داخل الفقاعة */
+    .message-row.user:has(.chat-media-audio) { width: 100%; }
+    .message-row.user .message-content:has(.chat-media-audio) {
+      width: min(88%, 720px);
+      max-width: min(88%, 720px);
+      min-width: 0;
+    }
+    .user-bubble:has(.chat-media-audio) {
+      display: block;
+      width: 100%;
+      min-width: 0;
+      padding: 13px;
+      border-radius: 14px 5px 14px 14px;
+    }
+    .chat-media-audio {
+      display: block;
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      min-height: 54px;
+      margin-top: 12px;
+      border-radius: 10px;
+      color-scheme: dark;
+      accent-color: var(--gold);
+    }
+    .chat-media-audio:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
 
     /* ── تحليل بنيوي ── */
     .analysis-details { margin-top: 12px; width: 100%; }
@@ -183,6 +208,12 @@
     @keyframes pulse { 0%,60%,100% { opacity: .35; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
     @keyframes breathe { 0%,100% { transform: scale(.97); opacity: .52; } 50% { transform: scale(1.04); opacity: .95; } }
     @media (min-width:1450px) { .thread { width: min(100%,880px); } .composer-wrap { width: min(100%,810px); } }
+    @media (min-width:681px) and (max-width:1100px) {
+      .sidebar { flex-basis: 225px; min-width: 210px; padding-right: 14px; padding-left: 14px; }
+      .topbar { padding-right: 24px; padding-left: 24px; }
+      .thread { padding-right: 22px; padding-left: 22px; }
+      .message-row.user .message-content:has(.chat-media-audio) { width: min(92%,720px); max-width: min(92%,720px); }
+    }
     @media (max-width:900px) { .sidebar { flex-basis: 245px; min-width: 230px; } .thread { padding-right: 24px; padding-left: 24px; } }
     @media (max-width:680px) {
       .app { min-height: 100dvh; }
@@ -201,8 +232,14 @@
       .thread { padding: 24px 17px 17px; }
       .thread-date { margin-bottom: 26px; }
       .messages { gap: 22px; }
-      .message-content, .message-row.assistant .message-content { max-width: 92%; }
-      .bubble { font-size: 12px; }
+      .message-content, .message-row.assistant .message-content { max-width: 92%; min-width: 0; }
+      .message-row.user .message-content:has(.chat-media-audio) {
+        width: min(100%, 760px);
+        max-width: 100%;
+      }
+      .user-bubble:has(.chat-media-audio) { padding: 11px; }
+      .chat-media-audio { min-height: 58px; margin-top: 10px; }
+      .bubble { font-size: 12px; overflow-wrap: anywhere; }
       .analysis-sentences { font-size: 11px; }
       .dock { padding: 9px 12px max(12px,env(safe-area-inset-bottom)); }
       .composer { min-height: 56px; padding: 8px; gap: 5px; }
@@ -223,7 +260,27 @@
       .starter-arrow { margin-right: auto; }
       .starter-text { white-space: normal; }
     }
-    @media (max-width:390px) { .session-title { max-width: 112px; } .model { gap: 5px; padding: 0 7px; } .composer-meta { font-size: 7px; } }
+    @media (max-width:390px) {
+      .session-title { max-width: 112px; }
+      .model { gap: 5px; padding: 0 7px; }
+      .composer-meta { font-size: 7px; }
+      .thread { padding-right: 12px; padding-left: 12px; }
+      .message-row.user .message-content:has(.chat-media-audio) { width: 100%; max-width: 100%; }
+      .user-bubble:has(.chat-media-audio) { padding: 9px; }
+      .chat-media-audio { min-height: 60px; }
+      .dock { padding-right: 9px; padding-left: 9px; }
+    }
+    @media (max-height:520px) and (max-width:680px) {
+      .topbar { flex-basis: 54px; }
+      .dock { padding-top: 6px; }
+      .composer-meta { padding-top: 5px; }
+      .welcome { padding-top: 12px; }
+      .emblem-wrap { transform: scale(.78); margin-top: -12px; margin-bottom: -2px; }
+      .starter-area { margin-top: 14px; }
+    }
+    @media (hover:none) {
+      .new-chat:hover, .starter-chip:hover { transform: none; }
+    }
     @media (prefers-reduced-motion:reduce) { *,*::before,*::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
   </style>
 </head>
