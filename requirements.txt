@@ -1,8 +1,7 @@
-# Lordera Gateway — Dependencies (v3.5.0)
+# Lordera Gateway — Dependencies (v4.0.0)
 fastapi
 uvicorn[standard]
 httpx
 pydantic
 python-multipart
 python-dotenv
-edge-tts
