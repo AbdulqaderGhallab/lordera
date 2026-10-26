@@ -272,7 +272,7 @@
     // ═══════════════════════════════════════════════════════════════
     // إعدادات الخادم (HTTPS لتفادي Mixed Content مع Akash ingress)
     // ═══════════════════════════════════════════════════════════════
-    const API = "https://ehrdtp1td1e73flsodd94ka5b8.ingress.akash.rhite.co.uk";
+    const API = "https://7dte737srt99h661rlls874vl8.ingress.zencloud.eu";
 
     const iconChat = '<svg class="chat-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l1.7-3.3A7.5 7.5 0 1 1 20 11.5Z" stroke="currentColor" stroke-width="1.55" stroke-linejoin="round"/></svg>';
     const logoSmall = '<svg class="brand-mark" width="26" height="26" viewBox="0 0 44 44" fill="none" aria-hidden="true"><circle cx="22" cy="22" r="19.25" stroke="currentColor" stroke-opacity=".24"/><circle cx="22" cy="22" r="14.5" stroke="currentColor" stroke-opacity=".13"/><path d="M13.5 25.7c2.1-7.3 11.7-13.8 17.1-9.3 3.2 2.7 1.7 8.4-2.2 11.4-4 3.1-9.7 2.9-12.6-.3" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"/><path d="M14 29.7c4.8 2 11.1.9 14.6-2.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="31.3" cy="13.4" r="1.35" fill="currentColor"/></svg>';
@@ -442,14 +442,24 @@
     // ═══════════════════════════════════════════════════════════════
     // إرسال صوت → POST /transcribe ثم /chat
     // ═══════════════════════════════════════════════════════════════
-    async function sendAudio(file) {
+    async function sendAudio(file, text = "") {
       if (!file || typingFor) return;
       const chat = ensureActiveChat();
       if (!chat) return;
 
       const userMsgId = "u-" + Date.now();
-      chat.messages.push({ id: userMsgId, role: "user", text: "🎤 [رسالة صوتية: " + file.name + "]" });
-      if (chat.title === "محادثة جديدة") chat.title = "رسالة صوتية";
+      const audioUrl = URL.createObjectURL(file);
+      let displayText = "🎤 [رسالة صوتية: " + file.name + "]";
+      if (text) displayText = text + "\n" + displayText;
+
+      chat.messages.push({
+        id: userMsgId,
+        role: "user",
+        text: displayText,
+        media: { base64: audioUrl, type: file.type || "audio/mpeg" }
+      });
+
+      if (chat.title === "محادثة جديدة") chat.title = text ? titleFrom(text) : "رسالة صوتية";
       input.disabled = true;
       typingFor = chat.id;
       render();
@@ -464,18 +474,28 @@
         }
         const { transcript } = await tRes.json();
 
-        if (!transcript || !transcript.trim()) {
-          chat.messages.push({
-            id: "a-" + Date.now(),
-            role: "assistant",
-            text: "لم أسمع شيئًا واضحًا في التسجيل.",
-            error: true,
-          });
-          return;
+        const userMsg = chat.messages.find(m => m.id === userMsgId);
+        if (userMsg) {
+          let finalText = "";
+          if (text) finalText += text;
+          if (transcript && transcript.trim()) {
+            if (finalText) finalText += "\n\n";
+            finalText += "🎤 " + transcript;
+          }
+          userMsg.text = finalText || "🎤 [رسالة صوتية فارغة]";
         }
 
-        const userMsg = chat.messages.find(m => m.id === userMsgId);
-        if (userMsg) userMsg.text = "🎤 " + transcript;
+        if (!transcript || !transcript.trim()) {
+          if (!text) {
+            chat.messages.push({
+              id: "a-" + Date.now(),
+              role: "assistant",
+              text: "لم أسمع شيئًا واضحًا في التسجيل.",
+              error: true,
+            });
+            return;
+          }
+        }
 
         const history = chat.messages.map(m => ({ role: m.role, content: m.text }));
         const cRes = await fetch(API + "/chat", {
@@ -587,12 +607,15 @@
     document.getElementById("composerForm").addEventListener("submit", async event => {
       event.preventDefault();
       if (typingFor) return;
+      const textVal = input.value.trim();
       if (pendingAudio) {
         const f = pendingAudio;
         setPendingAudio(null);
-        await sendAudio(f);
-      } else {
-        await sendMessage(input.value);
+        input.value = ""; 
+        input.style.height = "auto";
+        await sendAudio(f, textVal);
+      } else if (textVal) {
+        await sendMessage(textVal);
       }
     });
 

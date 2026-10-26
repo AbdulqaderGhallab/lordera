@@ -48,7 +48,7 @@ CARTESIA_VERSION    = os.getenv("CARTESIA_VERSION", "2024-06-10")
 CARTESIA_BASE       = "https://api.cartesia.ai"
 
 WHISPER_TIMEOUT = float(os.getenv("WHISPER_TIMEOUT", "120.0"))
-QWEN_TIMEOUT    = float(os.getenv("QWEN_TIMEOUT",    "120.0")) # رفعناها إلى 120 لدعم التحليل الطويل
+QWEN_TIMEOUT    = float(os.getenv("QWEN_TIMEOUT",    "120.0"))
 TTS_TIMEOUT     = float(os.getenv("TTS_TIMEOUT",     "60.0"))
 
 MAX_RETRIES   = int(os.getenv("MAX_RETRIES", "3"))
@@ -403,10 +403,22 @@ def _normalize_visual_elements(items: Any) -> List[Dict[str, Any]]:
 # Structured analysis with deterministic validation
 # ==============================================================================
 def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict[str, Any]:
-    sentences_in = parsed.get("sentences") or []
+    # التحقق من أن parsed قاموس فعلي
+    if not isinstance(parsed, dict):
+        return _fallback_analysis(original)
+
+    sentences_in = parsed.get("sentences")
+    # التحقق من أن sentences قائمة
+    if not isinstance(sentences_in, list):
+        return _fallback_analysis(original)
+
     sentences_out: List[Dict[str, Any]] = []
     cursor = 0
+
     for s_idx, s in enumerate(sentences_in, start=1):
+        # التحقق من أن كل جملة قاموس
+        if not isinstance(s, dict):
+            continue
         s_text = str(s.get("text", ""))
         if not s_text.strip():
             continue
@@ -414,7 +426,6 @@ def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict
         if pos < 0:
             pos = original.find(s_text.strip(), cursor)
             if pos < 0:
-                logger.warning(f"Analysis: sentence not in source, skipping: {s_text[:50]!r}")
                 continue
             s_text = s_text.strip()
         s_end = pos + len(s_text)
@@ -422,7 +433,13 @@ def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict
 
         segments_out: List[Dict[str, Any]] = []
         s_cursor = pos
-        for g in (s.get("segments") or []):
+        segments_in = s.get("segments")
+        if not isinstance(segments_in, list):
+            segments_in = []
+
+        for g in segments_in:
+            if not isinstance(g, dict):
+                continue
             g_text = str(g.get("text", ""))
             if not g_text.strip():
                 continue
@@ -430,7 +447,6 @@ def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict
             if g_pos < 0 or g_pos + len(g_text) > s_end:
                 g_pos = original.find(g_text.strip(), s_cursor)
                 if g_pos < 0 or g_pos + len(g_text.strip()) > s_end:
-                    logger.warning(f"Analysis: segment not in sentence, skipping: {g_text[:40]!r}")
                     continue
                 g_text = g_text.strip()
             g_end = g_pos + len(g_text)
@@ -464,12 +480,14 @@ def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict
             "segments": segments_out,
         })
 
+    # حساب التوقيتات بشكل آمن
     t = 0.0
     for s in sentences_out:
-        for g in s["segments"]:
-            g["timing"]["start"] = round(t, 2)
-            g["timing"]["end"] = round(t + g["timing"]["duration_estimate"], 2)
-            t = g["timing"]["end"]
+        for g in s.get("segments", []):
+            timing = g.setdefault("timing", {})
+            timing["start"] = round(t, 2)
+            timing["end"] = round(t + timing.get("duration_estimate", 0.5), 2)
+            t = timing["end"]
 
     return {
         "original_text": original,
@@ -632,7 +650,7 @@ async def analyze_transcript(transcript: str, request_id: str) -> Dict[str, Any]
     if not transcript.strip():
         return _fallback_analysis("")
 
-    # FIX: استخدام replace بدلاً من format لتجنب خطأ KeyError مع أقواس JSON
+    # استخدام replace بدلاً من format لتجنب خطأ KeyError مع أقواس JSON
     prompt = ANALYZER_USER_PROMPT.replace("{transcript}", transcript)
     
     json_body = {
