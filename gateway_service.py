@@ -36,20 +36,19 @@ logger = logging.getLogger("gateway")
 GROQ_API_KEY        = os.getenv("GROQ_API_KEY", "")
 GROQ_API_BASE       = os.getenv("GROQ_API_BASE", "https://api.groq.com/openai/v1")
 GROQ_WHISPER_MODEL  = os.getenv("GROQ_WHISPER_MODEL", "whisper-large-v3")
-# Corrected: qwen/qwen3.8-27b is NOT a valid Groq model.
 GROQ_CHAT_MODEL     = os.getenv("GROQ_CHAT_MODEL",
-                                os.getenv("GROQ_QWEN_MODEL", "llama-3.3-70b-versatile"))
+                                os.getenv("GROQ_QWEN_MODEL", "qwen/qwen3.8-27b"))
 
 # Cartesia TTS
 CARTESIA_API_KEY    = os.getenv("CARTESIA_API_KEY", "").strip()
 CARTESIA_VOICE_ID   = os.getenv("CARTESIA_VOICE_ID",
                                 "9cbad5f7-fbf6-4416-a22f-1ecc75ad40a2").strip()
-CARTESIA_MODEL      = os.getenv("CARTESIA_MODEL", "sonic-2")
+CARTESIA_MODEL      = os.getenv("CARTESIA_MODEL", "sonic-3.6")
 CARTESIA_VERSION    = os.getenv("CARTESIA_VERSION", "2024-06-10")
 CARTESIA_BASE       = "https://api.cartesia.ai"
 
 WHISPER_TIMEOUT = float(os.getenv("WHISPER_TIMEOUT", "120.0"))
-QWEN_TIMEOUT    = float(os.getenv("QWEN_TIMEOUT",    "60.0"))
+QWEN_TIMEOUT    = float(os.getenv("QWEN_TIMEOUT",    "120.0")) # رفعناها إلى 120 لدعم التحليل الطويل
 TTS_TIMEOUT     = float(os.getenv("TTS_TIMEOUT",     "60.0"))
 
 MAX_RETRIES   = int(os.getenv("MAX_RETRIES", "3"))
@@ -413,7 +412,6 @@ def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict
             continue
         pos = original.find(s_text, cursor)
         if pos < 0:
-            # Try stripped variant
             pos = original.find(s_text.strip(), cursor)
             if pos < 0:
                 logger.warning(f"Analysis: sentence not in source, skipping: {s_text[:50]!r}")
@@ -439,7 +437,6 @@ def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict
             s_cursor = g_end
 
             wc = _count_words(g_text)
-            # ~2.7 Arabic words/sec estimate
             dur = max(0.3, wc / 2.7)
             segments_out.append({
                 "id": f"s{s_idx}-g{len(segments_out)+1}",
@@ -467,7 +464,6 @@ def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict
             "segments": segments_out,
         })
 
-    # Cumulative timing
     t = 0.0
     for s in sentences_out:
         for g in s["segments"]:
@@ -487,7 +483,6 @@ def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict
     }
 
 def _fallback_analysis(text: str) -> Dict[str, Any]:
-    """Deterministic fallback if AI output is unusable. Preserves text exactly."""
     sentences_raw = re.split(r"(?<=[.!?؟])\s+", text.strip())
     sentences_raw = [s for s in sentences_raw if s.strip()]
     sentences_out: List[Dict[str, Any]] = []
@@ -637,7 +632,9 @@ async def analyze_transcript(transcript: str, request_id: str) -> Dict[str, Any]
     if not transcript.strip():
         return _fallback_analysis("")
 
-    prompt = ANALYZER_USER_PROMPT.format(transcript=transcript)
+    # FIX: استخدام replace بدلاً من format لتجنب خطأ KeyError مع أقواس JSON
+    prompt = ANALYZER_USER_PROMPT.replace("{transcript}", transcript)
+    
     json_body = {
         "model": GROQ_CHAT_MODEL,
         "messages": [
@@ -673,7 +670,6 @@ async def analyze_transcript(transcript: str, request_id: str) -> Dict[str, Any]
 # Cartesia TTS
 # ==============================================================================
 def _normalize_tts_voice(_: Optional[str]) -> str:
-    # Always use the configured voice — AI must not override.
     return CARTESIA_VOICE_ID
 
 async def _generate_tts_bytes(text: str, voice_id: str) -> bytes:
