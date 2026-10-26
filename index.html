@@ -88,17 +88,39 @@
     .assistant-avatar { display: grid; width: 30px; height: 30px; flex: 0 0 auto; place-items: center; border: 1px solid rgba(196,164,106,.17); border-radius: 50%; background: radial-gradient(circle at 35% 28%, rgba(196,164,106,.14), rgba(196,164,106,.02) 75%); color: var(--gold); }
     .assistant-avatar .brand-mark { width: 25px; height: 25px; }
     .message-content { display: flex; flex: 0 1 auto; flex-direction: column; align-items: flex-start; max-width: min(78%,600px); }
+    .message-row.assistant .message-content { max-width: min(90%,720px); }
     .author { display: flex; align-items: center; gap: 7px; margin: 0 4px 7px 0; color: #c9b78e; font-size: 11px; font-weight: 550; }
     .time { color: #6f7068; font-size: 10px; font-weight: 400; }
-    .bubble { color: #cbc9c1; font-size: 13px; line-height: 1.95; }
+    .bubble { color: #cbc9c1; font-size: 13px; line-height: 1.95; width: 100%; }
     .bubble p { margin: 0; white-space: pre-line; }
     .bubble p.error-text { color: #d99a8a; }
-    .user-bubble { padding: 10px 15px 11px; border: 1px solid rgba(224,207,169,.075); border-radius: 14px 4px 14px 14px; background: #141613; color: #d9d7cf; }
+    .user-bubble { padding: 10px 15px 11px; border: 1px solid rgba(224,207,169,.075); border-radius: 14px 4px 14px 14px; background: #141613; color: #d9d7cf; width: auto; }
     .assistant-bubble { padding: 0 3px; color: #c9c8c0; }
     .chat-media-audio { width: 100%; margin-top: 10px; }
-    .analysis-details { margin-top: 10px; width: 100%; }
-    .analysis-details summary { cursor: pointer; color: var(--gold); font-size: 10px; padding: 2px 0; }
-    .analysis-details pre { background: #0a0b0a; padding: 10px; border-radius: 6px; overflow: auto; max-height: 340px; font-size: 10px; margin-top: 6px; border: 1px solid rgba(224,207,169,.1); direction: ltr; text-align: left; color: #c9c8c0; font-family: ui-monospace, "Courier New", monospace; }
+
+    /* ── تحليل بنيوي ── */
+    .analysis-details { margin-top: 12px; width: 100%; }
+    .analysis-details > summary { cursor: pointer; color: var(--gold); font-size: 11px; padding: 3px 0; user-select: none; }
+    .analysis-details > summary:hover { color: var(--gold-light); }
+    .analysis-body { margin-top: 9px; padding: 12px 14px; border: 1px solid rgba(224,207,169,.1); border-radius: 10px; background: rgba(255,255,255,.014); }
+    .analysis-summary { color: #d5d2ca; font-size: 11.5px; line-height: 1.85; margin-bottom: 10px; }
+    .analysis-meta { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 9px; }
+    .analysis-tag { padding: 2px 9px; border: 1px solid rgba(196,164,106,.22); border-radius: 10px; background: rgba(196,164,106,.05); color: #c5b48f; font-size: 9px; }
+    .analysis-topics { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 12px; }
+    .analysis-topic { padding: 2px 9px; border-radius: 10px; background: rgba(196,164,106,.09); color: #d8c49b; font-size: 9px; }
+    .analysis-sentences { margin: 0; padding: 0 18px 0 0; list-style: decimal; color: #b8b6ae; font-size: 11.5px; line-height: 1.85; }
+    .analysis-sentences > li { margin-bottom: 11px; }
+    .analysis-sentences > li::marker { color: var(--gold); }
+    .analysis-sentence { color: #dad7cf; margin-bottom: 6px; }
+    .analysis-segments { display: flex; flex-direction: column; gap: 5px; padding-right: 10px; border-right: 1px solid rgba(196,164,106,.14); }
+    .analysis-segment { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 10px; }
+    .seg-text { color: #9a9890; }
+    .visual-chip { padding: 1px 8px; border: 1px solid rgba(196,164,106,.24); border-radius: 8px; background: rgba(196,164,106,.06); color: #c5b48f; font-size: 9px; cursor: help; }
+    .visual-chip[data-type]::before { content: "◈ "; color: #88724d; }
+    .analysis-raw { margin-top: 12px; }
+    .analysis-raw > summary { cursor: pointer; color: #8a8578; font-size: 9.5px; padding: 2px 0; }
+    .analysis-raw pre { background: #0a0b0a; padding: 10px; border-radius: 6px; overflow: auto; max-height: 340px; font-size: 10px; margin-top: 6px; border: 1px solid rgba(224,207,169,.1); direction: ltr; text-align: left; color: #c9c8c0; font-family: ui-monospace, "Courier New", monospace; }
+
     .suggestions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 13px; }
     .suggestions button { padding: 5px 11px 6px; border: 1px solid rgba(196,164,106,.2); border-radius: 16px; background: rgba(196,164,106,.035); color: #c5b48f; font-size: 10px; transition: .2s ease; }
     .suggestions button:hover { border-color: rgba(196,164,106,.45); background: rgba(196,164,106,.1); }
@@ -179,8 +201,9 @@
       .thread { padding: 24px 17px 17px; }
       .thread-date { margin-bottom: 26px; }
       .messages { gap: 22px; }
-      .message-content { max-width: 87%; }
+      .message-content, .message-row.assistant .message-content { max-width: 92%; }
       .bubble { font-size: 12px; }
+      .analysis-sentences { font-size: 11px; }
       .dock { padding: 9px 12px max(12px,env(safe-area-inset-bottom)); }
       .composer { min-height: 56px; padding: 8px; gap: 5px; }
       .composer textarea { font-size: 12px; }
@@ -277,7 +300,6 @@
     const iconChat = '<svg class="chat-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M20 11.5a7.5 7.5 0 0 1-7.5 7.5H5l1.7-3.3A7.5 7.5 0 1 1 20 11.5Z" stroke="currentColor" stroke-width="1.55" stroke-linejoin="round"/></svg>';
     const logoSmall = '<svg class="brand-mark" width="26" height="26" viewBox="0 0 44 44" fill="none" aria-hidden="true"><circle cx="22" cy="22" r="19.25" stroke="currentColor" stroke-opacity=".24"/><circle cx="22" cy="22" r="14.5" stroke="currentColor" stroke-opacity=".13"/><path d="M13.5 25.7c2.1-7.3 11.7-13.8 17.1-9.3 3.2 2.7 1.7 8.4-2.2 11.4-4 3.1-9.7 2.9-12.6-.3" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"/><path d="M14 29.7c4.8 2 11.1.9 14.6-2.4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/><circle cx="31.3" cy="13.4" r="1.35" fill="currentColor"/></svg>';
 
-    // حالة نظيفة تمامًا — لا محادثات وهمية
     let chats = [];
     let activeId = null;
     let typingFor = null;
@@ -314,16 +336,76 @@
 
     function renderMedia(message) {
       if (!message.media?.base64 || !message.media?.type) return "";
-      // صور لم تعد مدعومة — نتعامل مع الصوت فقط
       if (message.media.type.startsWith("audio/")) {
         return '<audio src="' + message.media.base64 + '" controls class="chat-media-audio"></audio>';
       }
       return "";
     }
 
+    // ── عرض التحليل البنيوي بشكل مقروء + JSON خام في toggle ثانوي ──
     function renderAnalysis(analysis) {
       if (!analysis) return "";
-      return '<details class="analysis-details"><summary>📊 التحليل البنيوي</summary><pre>' + escapeHTML(JSON.stringify(analysis, null, 2)) + '</pre></details>';
+
+      const sentimentLabels = { positive: "إيجابي", negative: "سلبي", neutral: "محايد" };
+      const intentLabels = {
+        request: "طلب", complaint: "شكوى", inquiry: "استفسار",
+        informational: "معلوماتي", feedback: "تقييم", other: "آخر"
+      };
+      const mediaLabels = { image: "صورة", icon: "أيقونة", chart: "مخطط", illustration: "رسم توضيحي" };
+      const typeLabels = {
+        person: "شخص", place: "مكان", object: "شيء", animal: "حيوان",
+        event: "حدث", concept: "مفهوم", number: "رقم", other: "آخر"
+      };
+
+      let body = "";
+
+      if (analysis.summary) {
+        body += '<div class="analysis-summary">' + escapeHTML(analysis.summary) + '</div>';
+      }
+
+      const meta = [];
+      if (analysis.sentiment) meta.push('<span class="analysis-tag">المشاعر: ' + escapeHTML(sentimentLabels[analysis.sentiment] || analysis.sentiment) + '</span>');
+      if (analysis.intent) meta.push('<span class="analysis-tag">القصد: ' + escapeHTML(intentLabels[analysis.intent] || analysis.intent) + '</span>');
+      if (Array.isArray(analysis.key_topics) && analysis.key_topics.length) {
+        meta.push('<span class="analysis-tag">مواضيع: ' + analysis.key_topics.length + '</span>');
+      }
+      if (meta.length) body += '<div class="analysis-meta">' + meta.join("") + '</div>';
+
+      if (Array.isArray(analysis.key_topics) && analysis.key_topics.length) {
+        body += '<div class="analysis-topics">' +
+          analysis.key_topics.map(t => '<span class="analysis-topic">' + escapeHTML(t) + '</span>').join("") +
+          '</div>';
+      }
+
+      if (Array.isArray(analysis.sentences) && analysis.sentences.length) {
+        body += '<ol class="analysis-sentences">';
+        analysis.sentences.forEach(s => {
+          body += '<li><div class="analysis-sentence">' + escapeHTML(s.text || "") + '</div>';
+          const withVisuals = (s.segments || []).filter(g => Array.isArray(g.visual_elements) && g.visual_elements.length);
+          if (withVisuals.length) {
+            body += '<div class="analysis-segments">';
+            withVisuals.forEach(g => {
+              body += '<div class="analysis-segment"><span class="seg-text">' + escapeHTML(g.text || "") + '</span>';
+              g.visual_elements.forEach(v => {
+                const titleAttr = v.reason ? escapeHTML(v.reason) : "";
+                const labelText = (v.label || "") + (v.suggested_media ? " · " + (mediaLabels[v.suggested_media] || v.suggested_media) : "");
+                body += '<span class="visual-chip" data-type="' + escapeHTML(v.type || "other") + '" title="' + titleAttr + '">' + escapeHTML(labelText) + '</span>';
+              });
+              body += '</div>';
+            });
+            body += '</div>';
+          }
+          body += '</li>';
+        });
+        body += '</ol>';
+      }
+
+      body += '<details class="analysis-raw"><summary>عرض JSON الخام</summary><pre>' +
+              escapeHTML(JSON.stringify(analysis, null, 2)) +
+              '</pre></details>';
+
+      return '<details class="analysis-details" open><summary>📊 التحليل البنيوي</summary>' +
+             '<div class="analysis-body">' + body + '</div></details>';
     }
 
     function renderMessage(message) {
@@ -611,7 +693,7 @@
       if (pendingAudio) {
         const f = pendingAudio;
         setPendingAudio(null);
-        input.value = ""; 
+        input.value = "";
         input.style.height = "auto";
         await sendAudio(f, textVal);
       } else if (textVal) {

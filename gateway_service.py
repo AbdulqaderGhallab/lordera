@@ -1,9 +1,9 @@
 """
 ==============================================================================
-Lordera AI — Gateway Service v4.0.0
-- Text Chat (Groq / Llama-3.3-70B)
+Lordera AI — Gateway Service v4.0.1
+- Text Chat (Groq / Qwen 3.8 27B)
 - Speech-to-Text (Groq / Whisper large-v3)
-- Text-to-Speech (Cartesia / sonic-2)
+- Text-to-Speech (Cartesia / sonic-3.6)
 - Deep Text Analysis (sentences → segments → visual elements)
 No image generation.
 ==============================================================================
@@ -68,23 +68,34 @@ LEGACY_WAIT_TIMEOUT = float(os.getenv("LEGACY_WAIT_TIMEOUT", "120.0"))
 MAX_TEXT_LENGTH     = int(os.getenv("MAX_TEXT_LENGTH", "8000"))
 CHAT_MAX_HISTORY    = int(os.getenv("CHAT_MAX_HISTORY", "20"))
 CHAT_MAX_TOKENS     = int(os.getenv("CHAT_MAX_TOKENS", "2048"))
-ANALYZE_MAX_TOKENS  = int(os.getenv("ANALYZE_MAX_TOKENS", "8000"))
+# تم تقليلها إلى 4000 لتجنب انتهاء المهلة (Timeout) كما نصحت
+ANALYZE_MAX_TOKENS  = int(os.getenv("ANALYZE_MAX_TOKENS", "4000"))
 
 # ==============================================================================
 # Prompts
 # ==============================================================================
 CHAT_SYSTEM_PROMPT = """أنت لورديرا — مساعد ذكاء اصطناعي عربي ذكي وودود.
+يجب أن تُرجع دائماً كائن JSON صحيحاً واحداً فقط، دون أي نص خارجه، دون ```markdown.
 
-الإجراءات المتاحة:
-- "chat": محادثة عادية (افتراضي).
-- "tts": تحويل نص إلى كلام. توفير "text" (النص المطلوب نطقه كما هو، بلا وسوم أو رموز إضافية).
-- "analyze": تحليل نص. توفير "text".
+الإجراءات المتاحة وحقولها:
+- "chat"    : محادثة عادية. المعاملات: لا شيء. (الافتراضي)
+- "tts"     : تحويل نص إلى كلام. المعاملات: params.text = النص المطلوب نطقه حرفيًّا.
+- "analyze" : تحليل نصي هيكلي. المعاملات: params.text = النص المطلوب تحليله حرفيًّا.
 
-قواعد صارمة:
-1. أجب فقط بكائن JSON واحد بهذا الشكل:
-   {"action": "chat"|"tts"|"analyze", "reply": "ردك العربي", "params": {...}}
-2. "reply" دائماً بالعربية، طبيعي، دافئ، مختصر (سطر إلى ثلاثة).
-3. للصوت: استخرج النص المطلوب نطقه فقط كاملاً دون تغيير.
+أمثلة صارمة:
+المستخدم: "مرحباً" 
+→ {"action":"chat","reply":"أهلاً بك في لورديرا.","params":{}}
+
+المستخدم: "حوّل هذه الجملة إلى صوت: أهلاً بكم"
+→ {"action":"tts","reply":"سأولّد الصوت الآن.","params":{"text":"أهلاً بكم"}}
+
+المستخدم: "حلّل هذا النص: الذكاء الاصطناعي يغيّر طريقة عملنا"
+→ {"action":"analyze","reply":"سأحلّل النص بنيويًّا.","params":{"text":"الذكاء الاصطناعي يغيّر طريقة عملنا"}}
+
+قواعد لا يجوز خرقها:
+1. JSON واحد صحيح فقط. لا شرح قبله أو بعده.
+2. "reply" دائماً بالعربية، مختصر (سطر إلى ثلاثة).
+3. عند "tts" أو "analyze" انسخ النص المطلوب حرفيًّا كما ذكره المستخدم دون تعديل.
 """
 
 ANALYZER_SYSTEM_PROMPT = (
@@ -403,12 +414,10 @@ def _normalize_visual_elements(items: Any) -> List[Dict[str, Any]]:
 # Structured analysis with deterministic validation
 # ==============================================================================
 def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict[str, Any]:
-    # التحقق من أن parsed قاموس فعلي
     if not isinstance(parsed, dict):
         return _fallback_analysis(original)
 
     sentences_in = parsed.get("sentences")
-    # التحقق من أن sentences قائمة
     if not isinstance(sentences_in, list):
         return _fallback_analysis(original)
 
@@ -416,7 +425,6 @@ def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict
     cursor = 0
 
     for s_idx, s in enumerate(sentences_in, start=1):
-        # التحقق من أن كل جملة قاموس
         if not isinstance(s, dict):
             continue
         s_text = str(s.get("text", ""))
@@ -480,7 +488,6 @@ def _validate_and_enrich_analysis(original: str, parsed: Dict[str, Any]) -> Dict
             "segments": segments_out,
         })
 
-    # حساب التوقيتات بشكل آمن
     t = 0.0
     for s in sentences_out:
         for g in s.get("segments", []):
@@ -650,7 +657,6 @@ async def analyze_transcript(transcript: str, request_id: str) -> Dict[str, Any]
     if not transcript.strip():
         return _fallback_analysis("")
 
-    # استخدام replace بدلاً من format لتجنب خطأ KeyError مع أقواس JSON
     prompt = ANALYZER_USER_PROMPT.replace("{transcript}", transcript)
     
     json_body = {
@@ -661,6 +667,8 @@ async def analyze_transcript(transcript: str, request_id: str) -> Dict[str, Any]
         ],
         "temperature": 0,
         "max_tokens": ANALYZE_MAX_TOKENS,
+        "response_format": {"type": "json_object"},
+        "reasoning_format": "hidden"
     }
     try:
         response = await _groq_request(
@@ -668,12 +676,19 @@ async def analyze_transcript(transcript: str, request_id: str) -> Dict[str, Any]
             timeout=QWEN_TIMEOUT, request_id=request_id, breaker=chat_cb,
         )
         payload = response.json()
-        raw = payload["choices"][0]["message"]["content"]
+        msg = payload.get("choices", [{}])[0].get("message", {})
+        raw = msg.get("content") or msg.get("reasoning_content") or ""
+        if not raw:
+            raise ValueError("Empty model response")
+        
+        logger.info(f"[{request_id}] ANALYZE raw_len={len(raw)} first_chars={raw[:120]!r}")
     except Exception as e:
         logger.warning(f"[{request_id}] Analysis AI call failed: {e}. Using fallback.")
         return _fallback_analysis(transcript)
 
     parsed = _extract_json(raw)
+    logger.info(f"[{request_id}] ANALYZE parsed_keys={list(parsed.keys()) if isinstance(parsed,dict) else type(parsed)}")
+    
     if "raw_analysis" in parsed:
         logger.warning(f"[{request_id}] Analysis AI returned unparseable JSON. Using fallback.")
         return _fallback_analysis(transcript)
@@ -765,6 +780,8 @@ async def orchestrate_chat(messages: List[Dict[str, str]], request_id: str) -> D
         "messages": chat_messages,
         "temperature": 0.4,
         "max_tokens": CHAT_MAX_TOKENS,
+        "response_format": {"type": "json_object"},
+        "reasoning_format": "hidden"
     }
     response = await _groq_request(
         "POST", "/chat/completions", json_body=json_body,
@@ -780,6 +797,19 @@ async def orchestrate_chat(messages: List[Dict[str, str]], request_id: str) -> D
     action = decision.get("action")
     reply = decision.get("reply")
     params = decision.get("params") or {}
+
+    logger.info(f"[{request_id}] CHAT decision action={action!r} reply_len={len(reply or '')} params_keys={list(params.keys()) if isinstance(params,dict) else type(params)}")
+
+    # اقبل params إذا جاءت كسلسلة نصية
+    if isinstance(params, str):
+        try:
+            params = json.loads(params)
+        except Exception:
+            params = {}
+
+    # اقبل text مباشرة في الجذر إن لم يوجد داخل params
+    if not params.get("text") and decision.get("text"):
+        params["text"] = decision["text"]
 
     if action not in ("chat", "tts", "analyze"):
         fallback = decision.get("raw_analysis") or reply or str(raw)[:2000]
@@ -916,7 +946,7 @@ async def lifespan(app: FastAPI):
     global worker_task, cleanup_task, rate_cleanup_task
 
     logger.info("=" * 70)
-    logger.info("Lordera Gateway v4.0.0 starting")
+    logger.info("Lordera Gateway v4.0.1 starting")
     logger.info(f"Groq base:    {GROQ_API_BASE}")
     logger.info(f"Whisper:      {GROQ_WHISPER_MODEL}")
     logger.info(f"Chat model:   {GROQ_CHAT_MODEL}")
@@ -957,7 +987,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Lordera AI Gateway",
     description="Text chat + STT + Cartesia TTS + Deep analysis.",
-    version="4.0.0",
+    version="4.0.1",
     lifespan=lifespan,
 )
 app.add_middleware(
@@ -1037,7 +1067,7 @@ class HealthResponse(BaseModel):
 async def root():
     return {
         "service": "Lordera AI Gateway",
-        "version": "4.0.0",
+        "version": "4.0.1",
         "backend": "Groq + Cartesia",
         "endpoints": {
             "chat":         "POST /chat",
@@ -1058,7 +1088,7 @@ async def health_check():
     cartesia_ok = bool(CARTESIA_API_KEY and CARTESIA_API_KEY != "CHANGE_ME")
     return HealthResponse(
         status="healthy" if GROQ_API_KEY and cartesia_ok else "degraded",
-        version="4.0.0",
+        version="4.0.1",
         groq_api_configured=bool(GROQ_API_KEY),
         cartesia_api_configured=cartesia_ok,
         groq_whisper_model=GROQ_WHISPER_MODEL,
