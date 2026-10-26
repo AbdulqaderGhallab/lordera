@@ -331,6 +331,9 @@ metrics = {
 # ==============================================================================
 def _extract_json(raw: str) -> Dict[str, Any]:
     text = (raw or "").strip()
+    # Qwen3.8-27B يفكر افتراضيا وينتج <think>...</think> قبل JSON - يجب تنظيفه
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+    text = re.sub(r"<reasoning>.*?</reasoning>", "", text, flags=re.DOTALL).strip()
     try:
         result = json.loads(text)
         if isinstance(result, dict):
@@ -708,7 +711,8 @@ async def analyze_transcript(transcript: str, request_id: str) -> Dict[str, Any]
             "temperature": 0,
             "max_tokens": ANALYZE_MAX_TOKENS,
             "response_format": {"type": "json_object"},
-            # لا "reasoning_format" — قد يسبب سلوكًا غير متوقع
+            "reasoning_format": "hidden",
+            "reasoning_effort": "none",
         }
 
         raw = ""
@@ -851,7 +855,8 @@ async def orchestrate_chat(messages: List[Dict[str, str]], request_id: str) -> D
         "temperature": 0.4,
         "max_tokens": CHAT_MAX_TOKENS,
         "response_format": {"type": "json_object"},
-        # لا "reasoning_format" — قد يسبب سلوكًا غير متوقع
+            "reasoning_format": "hidden",
+            "reasoning_effort": "none",
     }
     response = await _groq_request(
         "POST", "/chat/completions", json_body=json_body,
